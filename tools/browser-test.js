@@ -86,6 +86,9 @@ async function confirmLoop(page, fn) {
       await page.evaluate(() => document.activeElement && document.activeElement.className));
     check('A-起動: Web Worker が利用可能な環境である',
       await page.evaluate(() => typeof Worker === 'function'));
+    check('A-キーボード(PC): ソフトキーボード用の隠し入力欄ではなく、盤面のマスにフォーカスする',
+      await page.evaluate(() => document.activeElement.id !== 'cell-key-input'),
+      await page.evaluate(() => document.activeElement && document.activeElement.id));
 
     /* --- 生成（Worker 経路で実行されるはず） --- */
     await page.click('#btn-new');
@@ -232,6 +235,33 @@ async function confirmLoop(page, fn) {
     await page.locator('#board .cell').nth(emptyIdx).tap();
     check('B-タッチ: タップでマスを選択できる',
       (await page.$$eval('#board .cell', (els) => els.filter((e) => e.className.indexOf('selected') >= 0).length)) === 1);
+    console.log('  （タップ後のフォーカス先: ' + (await page.evaluate(() => document.activeElement && (document.activeElement.id || document.activeElement.className)))
+      + ' / pointer:coarse=' + (await page.evaluate(() => window.matchMedia('(pointer: coarse)').matches)) + '）');
+    check('B-ソフトキーボード: マスをタップすると数字キーボード用の入力欄にフォーカスが移る',
+      await page.evaluate(() => document.activeElement && document.activeElement.id === 'cell-key-input'),
+      await page.evaluate(() => document.activeElement && (document.activeElement.id || document.activeElement.className)));
+    // ソフトキーボードからの入力を模擬する（Android の IME は input イベントで届く）
+    const imeInput = (v) => page.evaluate((val) => {
+      const ki = document.getElementById('cell-key-input');
+      ki.value = val;
+      ki.dispatchEvent(new Event('input', { bubbles: true }));
+    }, v);
+    await imeInput('6');
+    check('B-ソフトキーボード: キーボード入力の数字が選択マスに入る',
+      (await values(page))[emptyIdx] === '6', 'value=' + (await values(page))[emptyIdx]);
+    check('B-ソフトキーボード: 入力後も入力欄は空に戻る（連続入力できる）',
+      await page.evaluate(() => document.getElementById('cell-key-input').value === ''));
+    await page.evaluate(() => {
+      const ki = document.getElementById('cell-key-input');
+      const ev = new Event('beforeinput', { bubbles: true, cancelable: true });
+      ev.inputType = 'deleteContentBackward';
+      ki.dispatchEvent(ev);
+    });
+    check('B-ソフトキーボード: 削除（Backspace）で消去される', (await values(page))[emptyIdx] === '');
+    await imeInput('4');
+    await page.keyboard.press('Backspace');
+    check('B-ソフトキーボード: Backspace キーでも消去される', (await values(page))[emptyIdx] === '',
+      'value=' + (await values(page))[emptyIdx]);
     await page.locator('#pad button[data-digit]').first().tap();
     check('B-タッチ: 画面の数字ボタンで入力できる', (await userCells(page)) === 1, 'user=' + (await userCells(page)));
     check('B-タッチ: 実行時エラーが無い', errors.length === 0, errors.join(' / '));

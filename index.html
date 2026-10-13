@@ -80,6 +80,13 @@ select,textarea{
 textarea{font-family:var(--mono);font-size:.92rem;letter-spacing:.08em}
 
 .visually-hidden{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+/* スマホ・タブレット用の隠し入力欄。マスをタップしたときに数字キーボードを開くためだけに使う
+   （見えないが display:none にはしない。display:none の入力欄はフォーカスできないため） */
+.cell-key-input{
+  position:fixed;top:0;left:0;width:1px;height:1px;margin:0;padding:0;border:0;
+  opacity:.01;font-size:16px;color:transparent;background:transparent;caret-color:transparent;
+  pointer-events:none;z-index:-1;
+}
 /* ---- ヘッダー ---- */
 .app-header{
   display:flex;flex-wrap:wrap;gap:.75rem 1.5rem;align-items:center;justify-content:space-between;
@@ -264,7 +271,10 @@ dialog p{white-space:pre-line}
       <section class="panel board-panel" aria-labelledby="board-heading">
         <h2 id="board-heading" class="visually-hidden">数独盤面</h2>
         <div id="board" role="grid" aria-label="数独盤面 9行9列" aria-rowcount="9" aria-colcount="9"></div>
-        <p class="board-caption"><strong>キーボード入力はいつでも使えます</strong>（マスを選んでいなくても、数字キーを押すと入力できるマスを自動で選びます）。矢印キーで移動、1〜9で数字入力、Mで候補メモ、0・Backspace・Deleteで消去、Ctrl（⌘）+Z で Undo です。マウス／タッチではマスをクリック／タップして選択します。</p>
+        <input id="cell-key-input" class="cell-key-input" type="text" inputmode="numeric" pattern="[0-9]*"
+          autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+          tabindex="-1" aria-hidden="true" aria-label="数字入力用のキーボード入力欄">
+        <p class="board-caption"><strong>キーボード入力はいつでも使えます</strong>（マスを選んでいなくても、数字キーを押すと入力できるマスを自動で選びます）。矢印キーで移動、1〜9で数字入力、Mで候補メモ、0・Backspace・Deleteで消去、Ctrl（⌘）+Z で Undo です。<strong>スマートフォン・タブレットでは、マスをタップすると数字キーボードが開きます</strong>（マウスではマスをクリックして選択）。</p>
       </section>
 
       <section class="panel hint-panel" aria-labelledby="hint-title">
@@ -1063,7 +1073,7 @@ var SudokuCore = (function () {
       'btn-apply-hint', 'btn-close-hint', 'pad', 'btn-erase', 'btn-note', 'btn-clear-notes',
       'btn-undo', 'btn-redo', 'input-mode-indicator', 'busy-panel', 'busy-text', 'btn-cancel',
       'completion-panel', 'completion-text', 'confirm-dialog', 'confirm-text', 'confirm-ok',
-      'confirm-cancel', 'main', 'shared-note'].forEach(function (id) {
+      'confirm-cancel', 'main', 'shared-note', 'cell-key-input'].forEach(function (id) {
         el[id] = $(id);
       });
   }
@@ -1088,7 +1098,7 @@ var SudokuCore = (function () {
   var board = C.createBoard();
   var notes = C.createNotes();
   var history = { undo: [], redo: [] };
-  var view = { selected: { r: 0, c: 0 }, inputMode: 'digit', userPicked: false };
+  var view = { selected: { r: 0, c: 0 }, inputMode: 'digit', userPicked: false, lastPointerType: 'mouse' };
 
   // プレイモード固有（共有盤面に紐づく付加情報）
   function newPlayMeta() {
@@ -1611,15 +1621,54 @@ var SudokuCore = (function () {
     renderBoard();
     updateControls();
     if (focus) {
-      var cell = cellEls[r * 9 + c];
-      if (cell && document.activeElement !== cell) cell.focus({ preventScroll: true });
+      if (wantsSoftKeyboard()) focusBridgeInput();            // スマホ・タブレット: 数字キーボードを開く
+      else {
+        var cell = cellEls[r * 9 + c];
+        if (cell && document.activeElement !== cell) cell.focus({ preventScroll: true });
+      }
     }
   }
   function moveSelection(dr, dc) {
     selectCell(Math.min(8, Math.max(0, view.selected.r + dr)),
       Math.min(8, Math.max(0, view.selected.c + dc)), true);
   }
-  /** 入力できる最初の空きマス（無ければ入力できる最初のマス）を選び、フォーカスする。 */
+  /** タッチ主体の端末（スマートフォン・タブレット）かどうか。 */
+  function touchPrimary() {
+    try {
+      if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) return true;
+      if (window.matchMedia && window.matchMedia('(pointer: fine)').matches) return false;
+    } catch (e) { /* matchMedia が無い環境ではタッチ判定に進む */ }
+    return 'ontouchstart' in window;
+  }
+  /** ソフトキーボード（スマホ・タブレットの数字キーボード）を使う操作かどうか。 */
+  function wantsSoftKeyboard() {
+    return view.lastPointerType === 'touch' || view.lastPointerType === 'pen' || touchPrimary();
+  }
+  /** 隠し入力欄にフォーカスして、スマホ・タブレットの数字キーボードを開く。 */
+  function focusBridgeInput() {
+    var ki = el['cell-key-input'];
+    if (!ki) return;
+    if (document.activeElement === ki) return;
+    try { ki.focus({ preventScroll: true }); } catch (e) { try { ki.focus(); } catch (e2) { /* 無視 */ } }
+  }
+  /** 隠し入力欄に入った文字（ソフトキーボードの入力）を盤面へ流す。 */
+  function onBridgeInput() {
+    var ki = el['cell-key-input'];
+    var v = ki.value;
+    ki.value = '';                                           // 連続入力できるよう常に空に戻す
+    if (!v) return;
+    for (var i = 0; i < v.length; i++) {
+      var ch = v.charAt(i);
+      if (ch >= '1' && ch <= '9') {
+        if (!ensureTypingTarget()) { notify('入力できるマスがありません。'); return; }
+        inputDigit(parseInt(ch, 10));
+      } else if (ch === '0') {
+        if (!ensureTypingTarget()) return;
+        eraseSelected();
+      }
+    }
+  }
+  /** 入力できる最初の空きマス（無ければ入力できる最初のマス）を選ぶ。 */
   function focusFirstEmptyCell() {
     var target = -1, fallback = -1;
     for (var i = 0; i < 81; i++) {
@@ -1630,7 +1679,8 @@ var SudokuCore = (function () {
     }
     if (target < 0) target = fallback;
     if (target < 0) return false;
-    selectCell(Math.floor(target / 9), target % 9, true);
+    // タッチ主体の端末では自動でキーボードを開かない（ユーザーがマスをタップしたときだけ開く）
+    selectCell(Math.floor(target / 9), target % 9, !touchPrimary());
     view.userPicked = false;                                 // 自動で選んだマス（ユーザーの明示選択ではない）
     return true;
   }
@@ -2495,6 +2545,44 @@ var SudokuCore = (function () {
       else if (isErase) eraseSelected();
       else toggleInputMode();
     });
+
+    // ソフトキーボード連携: 隠し入力欄で受けた入力を盤面へ流す（スマホ・タブレット）
+    if (el['cell-key-input']) {
+      el['cell-key-input'].addEventListener('input', onBridgeInput);
+      el['cell-key-input'].addEventListener('beforeinput', function (ev) {
+        if (ev.inputType === 'deleteContentBackward' || ev.inputType === 'deleteContentForward') {
+          ev.preventDefault();
+          if (ensureTypingTarget()) eraseSelected();
+        }
+      });
+      el['cell-key-input'].addEventListener('keydown', function (ev) {
+        var key = ev.key;
+        if (key === 'Backspace' || key === 'Delete') { ev.preventDefault(); if (ensureTypingTarget()) eraseSelected(); return; }
+        if (key === 'Enter') { ev.preventDefault(); ev.target.blur(); return; }
+        if (key === 'ArrowUp' || key === 'ArrowDown' || key === 'ArrowLeft' || key === 'ArrowRight') {
+          ev.preventDefault();
+          if (key === 'ArrowUp') moveSelection(-1, 0);
+          else if (key === 'ArrowDown') moveSelection(1, 0);
+          else if (key === 'ArrowLeft') moveSelection(0, -1);
+          else moveSelection(0, 1);
+          return;
+        }
+        if (key === 'm' || key === 'M') { ev.preventDefault(); toggleInputMode(); return; }
+        if ((ev.ctrlKey || ev.metaKey) && (key === 'z' || key === 'Z')) {
+          ev.preventDefault();
+          if (ev.shiftKey) doRedo(); else doUndo();
+        }
+      });
+    }
+    // 直前のポインタ種別を記録する（タッチ／ペンならソフトキーボードを使う）
+    if (window.PointerEvent) {
+      document.addEventListener('pointerdown', function (ev) {
+        view.lastPointerType = (ev && ev.pointerType) || 'mouse';
+      }, true);
+    } else {
+      document.addEventListener('mousedown', function () { view.lastPointerType = 'mouse'; }, true);
+      document.addEventListener('touchstart', function () { view.lastPointerType = 'touch'; }, true);
+    }
 
     el.pad.addEventListener('click', function (ev) {
       var t = ev.target;

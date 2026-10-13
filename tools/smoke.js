@@ -92,6 +92,34 @@ async function waitFor(fn, timeout, label) {
   docKey('9', { ctrlKey: true });
   check('キーボード: 修飾キー付きの入力は盤面に影響しない', userCells().length === 0, 'user=' + userCells().length);
 
+  /* ------------------------------- ソフトキーボード連携（スマホ・タブレット） */
+  const bridge = $('cell-key-input');
+  check('ソフトキーボード: 隠し入力欄が DOM に存在する', !!bridge);
+  check('ソフトキーボード: 隠し入力欄はタブ移動の対象にならない（tabindex=-1）',
+    !!bridge && bridge.getAttribute('tabindex') === '-1');
+  check('ソフトキーボード: 隠し入力欄は数字キーボードを指定している（inputmode=numeric）',
+    !!bridge && bridge.getAttribute('inputmode') === 'numeric');
+  const selIdx = cells().findIndex((c) => c.className.indexOf('selected') >= 0);
+  bridge.value = '6';
+  bridge.dispatchEvent(new win.Event('input', { bubbles: true }));
+  check('ソフトキーボード: 入力イベントの数字が選択マスに入る', valueOf(selIdx) === '6', 'value=' + valueOf(selIdx));
+  check('ソフトキーボード: 入力後は入力欄が空に戻る（連続入力できる）', bridge.value === '');
+  const delEv = new win.Event('beforeinput', { bubbles: true, cancelable: true });
+  delEv.inputType = 'deleteContentBackward';
+  bridge.dispatchEvent(delEv);
+  check('ソフトキーボード: 削除イベントで消去される', valueOf(selIdx) === '', 'value=' + valueOf(selIdx));
+  bridge.value = '9';
+  bridge.dispatchEvent(new win.Event('input', { bubbles: true }));
+  bridge.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }));
+  check('ソフトキーボード: Backspace キーで消去される', valueOf(selIdx) === '', 'value=' + valueOf(selIdx));
+  bridge.value = '12';
+  bridge.dispatchEvent(new win.Event('input', { bubbles: true }));
+  check('ソフトキーボード: 複数桁をまとめて受け取っても順に処理する', valueOf(selIdx) === '2', 'value=' + valueOf(selIdx));
+  bridge.value = '0';
+  bridge.dispatchEvent(new win.Event('input', { bubbles: true }));
+  check('ソフトキーボード: 0 の入力で消去される', valueOf(selIdx) === '', 'value=' + valueOf(selIdx));
+  check('ソフトキーボード: 一連の操作で起動時エラーが無い', (win.__errors || []).length === 0, (win.__errors || []).join(' / '));
+
   /* ------------------------------------------- 自動テスト機能の削除の確認 */
   check('自動テスト: 実行ボタンが削除されている', $('btn-run-tests') === null);
   check('自動テスト: 結果一覧の要素が削除されている', $('test-results') === null && $('test-summary') === null);
