@@ -1,5 +1,5 @@
 /* Node 用のテストランナー（開発用・アプリには含めない）
- * index.html から計算ロジックとテストの script を抜き出して実行する。
+ * index.html から計算ロジックを抜き出し、tools/tests.js のテストを実行する。
  *   node tools/run-tests.js
  */
 const fs = require('fs');
@@ -12,14 +12,18 @@ const html = fs.readFileSync(htmlPath, 'utf8');
 function extract(id) {
   const re = new RegExp('<script id="' + id + '">([\\s\\S]*?)<\\/script>');
   const m = html.match(re);
-  if (!m) throw new Error('script #' + id + ' が見つかりません');
+  if (!m) throw new Error('script #' + id + ' が見つかりません（index.html の構成が変わった可能性があります）');
   return m[1];
 }
 
 const core = extract('sudoku-core');
-const tests = extract('sudoku-tests');
+const tests = fs.readFileSync(path.join(__dirname, 'tests.js'), 'utf8');
 
-const ctx = { console, Date, Math, performance: { now: () => Date.now() }, Int8Array, Int32Array, Array, Object, JSON, Error, String, Number, isFinite, parseInt, setTimeout };
+const ctx = {
+  console, Date, Math, performance: { now: () => Date.now() },
+  Int8Array, Int32Array, Array, Object, JSON, Error, String, Number,
+  isFinite, parseInt, setTimeout
+};
 vm.createContext(ctx);
 vm.runInContext(core, ctx);
 vm.runInContext(tests, ctx);

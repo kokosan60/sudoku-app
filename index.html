@@ -322,7 +322,7 @@ dialog p{white-space:pre-line}
 
       <section id="panel-analysis" class="panel" role="tabpanel" aria-labelledby="tab-analysis" hidden>
         <h2>入力・解析モード</h2>
-        <p class="panel-note">81マスすべてを自由に編集できます。解の有無と唯一解かどうかを解析し、解を適用できます。</p>
+        <p class="panel-note">81マスすべてを自由に編集できます。解の有無と唯一解かどうかを解析し、解を適用できます。盤面・候補メモ・履歴はプレイモードと共有しており、モードを切り替えても盤面は変わりません。</p>
         <div class="field">
           <label for="import-text">81文字の問題データ（1〜9＝数字、0 または . ＝空欄）</label>
           <textarea id="import-text" rows="3" spellcheck="false" autocomplete="off"
@@ -333,7 +333,9 @@ dialog p{white-space:pre-line}
           <button type="button" id="btn-analyze" class="primary">解析</button>
           <button type="button" id="btn-analysis-solve" disabled>自動解答</button>
           <button type="button" id="btn-clear-board">盤面クリア</button>
+          <button type="button" id="btn-adopt" disabled>この盤面をプレイ問題として採用</button>
         </div>
+        <p class="panel-note small" id="shared-note">盤面・候補メモ・履歴はプレイモードと共有しています。ここで入力した盤面はそのままプレイモードに反映されます。</p>
         <p class="analysis-result" id="analysis-result">解析結果はまだありません。「解析」を押すと、解の有無と唯一解かどうかを調べます。</p>
       </section>
 
@@ -350,13 +352,6 @@ dialog p{white-space:pre-line}
     </div>
   </div>
 
-  <section class="panel tests" aria-labelledby="tests-title">
-    <h2 id="tests-title">自動テスト（計算ロジック）</h2>
-    <p class="panel-note">重複検出・解数判定・生成・論理ヒント・インポートの自動テストです。固定盤面と期待値を使い、通常のプレイデータは変更しません。実行は1件ずつ画面を譲りながら進みます。</p>
-    <div class="btn-row"><button type="button" id="btn-run-tests">テストを実行</button></div>
-    <p id="test-summary" role="status" aria-live="polite"></p>
-    <ol class="test-results" id="test-results"></ol>
-  </section>
 </main>
 
 <dialog id="confirm-dialog" aria-labelledby="confirm-title">
@@ -1015,423 +1010,25 @@ var SudokuCore = (function () {
   };
 })();
 </script>
-<script id="sudoku-tests">
-/* =============================================================================
- * SudokuTests — 計算ロジックの自動テスト（DOM に依存しない）
- * -----------------------------------------------------------------------------
- * ・固定盤面は、本アプリとは別実装のソルバー（Python）で「仕様の検出順で
- *   最初に見つかる手法」を確定させたものを使用している。
- * ・SudokuTests.list() でテスト名一覧、runOne(i) で 1 件ずつ、
- *   run() でまとめて実行できる（ブラウザ UI は runOne を分割実行する）。
- * ・期待値だけでなく「先に検出される手法が存在しないこと」も独立スキャンで検証する。
- * ===========================================================================*/
-var SudokuTests = (function () {
-  'use strict';
-  var C = SudokuCore;
-
-  /** 81 文字の文字列を 9x9 配列にする（テスト用の固定盤面の記述に使用）。 */
-  function B(s) {
-    var b = [];
-    for (var r = 0; r < 9; r++) {
-      var row = [];
-      for (var c = 0; c < 9; c++) row.push(parseInt(s.charAt(r * 9 + c), 10));
-      b.push(row);
-    }
-    return b;
-  }
-
-  /* ---- 固定テスト盤面（Python 実装で期待値を確定済み） ---- */
-  var FIX = {
-    // 裸のシングルが最初に検出される唯一解の問題（期待: 2行1列に 7）
-    nakedBoard: '852001090090402106004509200901208043605300900300904500230000800006003000400800370',
-    nakedSolution: '852631794793482156164579238971258643645317982328964517237145869586793421419826375',
-    // 行の隠れたシングル（期待: 2行9列に 6）※裸のシングルは存在しない
-    hiddenRowBoard: '000400007143008000078006400010800040039000602004207000000049000050780960000000008',
-    // 列の隠れたシングル（期待: 6行7列に 2）※裸・行の隠れは存在しない
-    hiddenColBoard: '400000000580903002201780006000090370002000008000800094010000003324600009000300020',
-    // ブロックの隠れたシングル（期待: 8行7列に 8）※裸・行・列の隠れは存在しない
-    hiddenBoxBoard: '304057298070800300000030706000010000007000100000020600200080000000370060700096430',
-    // 複数解（4マスの交換可能な矩形を空けた盤面）
-    multipleBoard: '618905302547823961293601508452196837361587294789432156836719425974258613125364789',
-    // 重複なしだが解なし
-    noSolutionBoard: '000750900780903060602004300541697000003140006007000100000060720000875003079320650',
-    // 重複あり（(1行1列) と (1行2列) がともに 4）
-    duplicateBoard: '441286793678935142239174568516842379327569814984713256145398627763421985892657431',
-    // 候補0個のマス（1行3列）＋別の場所に裸のシングル
-    contraCellBoard: '700345018908701400346000000635400087209578304870600000462100095007950032000820741',
-    // 候補0個のマスは無いが、2列目で 1 を置ける空欄が無い＋別の場所に裸のシングル
-    contraUnitBoard: '580036940060081502420790080094002150030604890170053060001048600800000430302509708'
-  };
-
-  /* ---- テスト登録 ---- */
-  var tests = [];
-  function test(name, fn, slow) { tests.push({ name: name, fn: fn, slow: !!slow }); }
-  function ok(cond, msg) { if (!cond) throw new Error(msg); }
-  function eq(actual, expected, label) {
-    if (actual !== expected) throw new Error(label + ' — 期待: ' + expected + ' / 実際: ' + actual);
-  }
-  function eqBoard(actual, expected, label) {
-    var a = C.boardKey(actual), e = C.boardKey(expected);
-    if (a !== e) throw new Error(label + ' — 盤面が一致しません\n期待: ' + e + '\n実際: ' + a);
-  }
-
-  /* ---- 独立スキャン（findLogicalHint の検出順を経由せず条件を確認する） ---- */
-  function scanNakedSingle(board) {
-    for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
-      if (board[r][c] !== 0) continue;
-      var cand = C.getCandidates(board, r, c);
-      if (cand.length === 1) return { row: r, col: c, digit: cand[0] };
-    }
-    return null;
-  }
-  function scanHiddenSingle(board, type) {
-    for (var i = 0; i < 9; i++) {
-      var cells = C.unitCells(type, i), placed = {};
-      for (var j = 0; j < cells.length; j++) {
-        var v = board[cells[j][0]][cells[j][1]];
-        if (v) placed[v] = true;
-      }
-      for (var d = 1; d <= 9; d++) {
-        if (placed[d]) continue;
-        var spots = [];
-        for (var k = 0; k < cells.length; k++) {
-          var r = cells[k][0], c = cells[k][1];
-          if (board[r][c] === 0 && C.getCandidates(board, r, c).indexOf(d) >= 0) spots.push([r, c]);
-        }
-        if (spots.length === 1) return { type: type, index: i, row: spots[0][0], col: spots[0][1], digit: d };
-      }
-    }
-    return null;
-  }
-
-  /* ============================== 1. 基本処理 ============================== */
-
-  test('重複検出：行・列・ブロックの重複を検出し、空欄は対象外', function () {
-    var b = C.createBoard();
-    b[0][0] = 5; b[0][4] = 5;                 // 同じ行の重複
-    b[3][1] = 7; b[6][1] = 7;                 // 同じ列の重複
-    b[4][4] = 9; b[5][5] = 9;                 // 同じブロックの重複
-    var dups = C.findDuplicates(b);
-    ok(dups.length === 6, '重複マスは 6 個のはず: ' + dups.length);
-    ok(dups.indexOf(0) >= 0 && dups.indexOf(4) >= 0, '1行1列と1行5列が重複として検出されること');
-    ok(dups.indexOf(28) >= 0 && dups.indexOf(55) >= 0, '同じ列の重複が検出されること');
-    ok(dups.indexOf(40) >= 0 && dups.indexOf(50) >= 0, '同じブロックの重複が検出されること');
-    ok(C.findDuplicates(C.createBoard()).length === 0, '空欄だけの盤面は重複なし');
-    // 候補メモ（別管理のデータ）は重複判定に影響しないこと
-    var notes = C.createNotes();
-    notes[0][1] = [5];
-    ok(C.findDuplicates(b).length === 6, '候補メモは重複判定に影響しないこと');
-  });
-
-  test('完成盤面の判定：有効な完成盤面と重複のある満杯盤面を区別', function () {
-    var solved = B(FIX.nakedSolution);
-    ok(C.isCompleteValid(solved), '唯一解の正解盤面は有効な完成盤面');
-    ok(C.findLogicalHint(solved).status === 'complete', 'ヒント関数も complete を返す');
-    var dupFull = C.cloneBoard(solved);
-    dupFull[0][1] = dupFull[0][0];
-    ok(!C.isCompleteValid(dupFull), '重複のある満杯盤面は完成とみなさない');
-    var incomplete = C.cloneBoard(solved);
-    incomplete[8][8] = 0;
-    ok(!C.isCompleteValid(incomplete), '空欄がある盤面は完成とみなさない');
-  });
-
-  test('解数の判定：唯一解／複数解／解なし（重複なし）／重複あり', function () {
-    var u = C.runSync(C.solveTask(B(FIX.nakedBoard), { limit: 2 }));
-    eq(C.classifySolveResult(u), 'unique', '固定盤面は唯一解');
-    eqBoard(u.solution, B(FIX.nakedSolution), '保存された正解と一致');
-
-    var m = C.runSync(C.solveTask(B(FIX.multipleBoard), { limit: 2 }));
-    eq(C.classifySolveResult(m), 'multiple', '矩形を空けた盤面は複数解');
-    ok(m.count >= 2, '2 個以上の解が見つかること');
-
-    var n = C.runSync(C.solveTask(B(FIX.noSolutionBoard), { limit: 2 }));
-    eq(C.classifySolveResult(n), 'none', '重複なしだが解なしの盤面');
-    eq(n.count, 0, '解の個数は 0');
-    eq(n.complete, true, '探索は完了していること');
-
-    var d = B(FIX.duplicateBoard);
-    ok(C.hasDuplicates(d), '重複ありの盤面を検出できること');
-    eq(C.findDuplicates(d).indexOf(0) >= 0, true, '1行1列が重複に関与');
-    eq(C.findDuplicates(d).indexOf(1) >= 0, true, '1行2列が重複に関与');
-  });
-
-  test('探索が元の盤面を変更しない', function () {
-    var src = B(FIX.nakedBoard);
-    var before = C.boardKey(src);
-    C.runSync(C.solveTask(src, { limit: 2 }));
-    eq(C.boardKey(src), before, '解探索後も盤面が変わらないこと');
-    var multi = B(FIX.multipleBoard), mBefore = C.boardKey(multi);
-    C.runSync(C.solveTask(multi, { limit: 2 }));
-    eq(C.boardKey(multi), mBefore, '複数解の探索でも盤面が変わらないこと');
-  });
-
-  test('探索未完了（limit=1 で打ち切り）を唯一解と誤判定しない', function () {
-    var r = C.runSync(C.solveTask(B(FIX.nakedBoard), { limit: 1 }));
-    eq(r.count, 1, '解を 1 個発見');
-    eq(r.complete, false, '探索は完了していない');
-    eq(r.aborted, 'limit', '打ち切り理由は limit');
-    eq(C.classifySolveResult(r), 'limited', '唯一解とも解なしとも判定しない');
-  });
-
-  /* ============================== 2. 生成 ============================== */
-
-  function genTest(minClues, maxClues, seed) {
-    var res = C.runSync(C.generateTask({
-      minClues: minClues, maxClues: maxClues, seed: seed,
-      maxAttempts: 400, deadline: Date.now() + 60000
-    }));
-    ok(res.ok === true, '生成に成功すること（reason=' + res.reason + '）');
-    var clues = 0;
-    for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) if (res.puzzle[r][c] !== 0) clues++;
-    eq(clues, res.clues, '初期配置数の申告が実際と一致');
-    ok(clues >= minClues && clues <= maxClues, '初期配置数が範囲内であること: ' + clues);
-    var verify = C.runSync(C.solveTask(res.puzzle, { limit: 2 }));
-    eq(C.classifySolveResult(verify), 'unique', '生成問題は唯一解');
-    eqBoard(verify.solution, res.solution, '生成した正解盤面と一致');
-    ok(C.isCompleteValid(res.solution), '正解盤面は有効な完成盤面');
-    // 初期配置は正解と一致していること
-    for (var r2 = 0; r2 < 9; r2++) for (var c2 = 0; c2 < 9; c2++) {
-      if (res.puzzle[r2][c2] !== 0 && res.puzzle[r2][c2] !== res.solution[r2][c2]) {
-        throw new Error('初期配置が正解と食い違っています (' + (r2 + 1) + '行' + (c2 + 1) + '列)');
-      }
-    }
-    return res;
-  }
-
-  test('生成：やさしい（初期配置 40〜46 個・唯一解）', function () {
-    var res = genTest(40, 46, 20261013);
-    ok(res.clues >= 40 && res.clues <= 46, 'やさしいの初期配置数: ' + res.clues);
-  }, true);
-
-  test('生成：ふつう（初期配置 32〜39 個・唯一解）', function () {
-    var res = genTest(32, 39, 1234567);
-    ok(res.clues >= 32 && res.clues <= 39, 'ふつうの初期配置数: ' + res.clues);
-  }, true);
-
-  test('生成：むずかしい（初期配置 26〜31 個・唯一解）', function () {
-    var res = genTest(26, 31, 987654321);
-    ok(res.clues >= 26 && res.clues <= 31, 'むずかしいの初期配置数: ' + res.clues);
-  }, true);
-
-  test('生成：指定範囲の問題を作れない場合は失敗を返す（範囲外を成功として返さない）', function () {
-    var res = C.runSync(C.generateTask({
-      minClues: 17, maxClues: 17, seed: 42, maxAttempts: 2, deadline: Date.now() + 400
-    }));
-    eq(res.ok, false, '生成失敗として返すこと');
-    ok(res.reason === 'time' || res.reason === 'attempts', '失敗理由が time か attempts: ' + res.reason);
-    eq(typeof res.puzzle, 'undefined', '失敗時は問題データを返さない');
-  }, true);
-
-  /* ============================== 3. 論理ヒント ============================== */
-
-  test('ヒント：裸のシングル（固定盤面・候補も検証）', function () {
-    var b = B(FIX.nakedBoard);
-    var res = C.findLogicalHint(b);
-    eq(res.status, 'found', '一手が見つかること');
-    eq(res.technique, 'naked_single', '手法は裸のシングル');
-    eq(res.row, 1, '対象は2行目');
-    eq(res.col, 0, '対象は1列目');
-    eq(res.digit, 7, '確定数字は 7');
-    eq(res.candidates.join(','), '7', '対象マスの論理候補は [7]');
-    eq(res.units.length, 3, '根拠は行・列・ブロックの3つ');
-    ok(res.reason.indexOf('7') >= 0, '理由文に確定数字が含まれること');
-  });
-
-  test('ヒント：行の隠れたシングル（先に検出される手法が無いこと）', function () {
-    var b = B(FIX.hiddenRowBoard);
-    eq(scanNakedSingle(b), null, '裸のシングルが存在しないこと');
-    var res = C.findLogicalHint(b);
-    eq(res.technique, 'hidden_single_row', '手法は行の隠れたシングル');
-    eq(res.row, 1, '対象は2行目');
-    eq(res.col, 8, '対象は9列目');
-    eq(res.digit, 6, '確定数字は 6');
-    eq(res.units.length, 1, '根拠ユニットは 1 つ');
-    eq(res.units[0].type, 'row', '根拠は行');
-    eq(res.units[0].index, 1, '根拠は2行目');
-    var scan = scanHiddenSingle(b, 'row');
-    eq(scan.row, 1, '独立スキャンでも2行目');
-    eq(scan.col, 8, '独立スキャンでも9列目');
-    eq(scan.digit, 6, '独立スキャンでも 6');
-  });
-
-  test('ヒント：列の隠れたシングル（裸・行の隠れが無いこと）', function () {
-    var b = B(FIX.hiddenColBoard);
-    eq(scanNakedSingle(b), null, '裸のシングルが存在しないこと');
-    eq(scanHiddenSingle(b, 'row'), null, '行の隠れたシングルが存在しないこと');
-    var res = C.findLogicalHint(b);
-    eq(res.technique, 'hidden_single_col', '手法は列の隠れたシングル');
-    eq(res.row, 5, '対象は6行目');
-    eq(res.col, 6, '対象は7列目');
-    eq(res.digit, 2, '確定数字は 2');
-    eq(res.units[0].type, 'col', '根拠は列');
-    eq(res.units[0].index, 6, '根拠は7列目');
-  });
-
-  test('ヒント：ブロックの隠れたシングル（裸・行・列の隠れが無いこと）', function () {
-    var b = B(FIX.hiddenBoxBoard);
-    eq(scanNakedSingle(b), null, '裸のシングルが存在しないこと');
-    eq(scanHiddenSingle(b, 'row'), null, '行の隠れたシングルが存在しないこと');
-    eq(scanHiddenSingle(b, 'col'), null, '列の隠れたシングルが存在しないこと');
-    var res = C.findLogicalHint(b);
-    eq(res.technique, 'hidden_single_box', '手法はブロックの隠れたシングル');
-    eq(res.row, 7, '対象は8行目');
-    eq(res.col, 6, '対象は7列目');
-    eq(res.digit, 8, '確定数字は 8');
-    eq(res.units[0].type, 'box', '根拠はブロック');
-    eq(res.units[0].index, C.boxIndex(7, 6), '根拠ブロックが対象マスと一致');
-  });
-
-  test('ヒント：同じ盤面では同じ一手を選び、候補メモの影響を受けない', function () {
-    var b = B(FIX.hiddenColBoard);
-    var a1 = C.findLogicalHint(b);
-    var a2 = C.findLogicalHint(C.cloneBoard(b));
-    eq(a1.technique + a1.row + ',' + a1.col + a1.digit, a2.technique + a2.row + ',' + a2.col + a2.digit, '同じ結果が返ること');
-    // 候補メモは findLogicalHint の引数ではないため、メモの内容は結果に影響しない
-    var notes = C.createNotes();
-    notes[5][6] = [1, 9];
-    notes[0][0] = [2];
-    var a3 = C.findLogicalHint(b);
-    eq(a1.technique + a1.row + ',' + a1.col + a1.digit, a3.technique + a3.row + ',' + a3.col + a3.digit, 'メモを変更しても結果は不変');
-    // 引数は盤面のみ（正解盤面に依存しない）
-    eq(C.findLogicalHint.length, 1, 'findLogicalHint の引数は 1 つ（盤面のみ）');
-    ok(C.findLogicalHint.toString().indexOf('solution') === -1, '実装が正解盤面を参照していないこと');
-    var before = C.boardKey(b);
-    C.findLogicalHint(b);
-    eq(C.boardKey(b), before, 'ヒント探索は盤面を変更しない');
-  });
-
-  test('ヒント：候補0個の矛盾を検出し、一手を提示しない（別の場所に裸のシングルがあっても）', function () {
-    var b = B(FIX.contraCellBoard);
-    eq(C.findDuplicates(b).length, 0, '前提: 重複は無い');
-    eq(C.getCandidates(b, 0, 2).length, 0, '前提: 1行3列の候補は 0 個');
-    ok(scanNakedSingle(b) !== null, '前提: 別の場所に裸のシングルが存在する');
-    var res = C.findLogicalHint(b);
-    eq(res.status, 'contradiction', '矛盾として扱い、一手を提示しない');
-    eq(typeof res.digit, 'undefined', '確定数字は返さない');
-  });
-
-  test('ヒント：未配置数字の配置場所が0個の矛盾を検出する', function () {
-    var b = B(FIX.contraUnitBoard);
-    eq(C.findDuplicates(b).length, 0, '前提: 重複は無い');
-    var anyZero = false;
-    for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
-      if (b[r][c] === 0 && C.getCandidates(b, r, c).length === 0) anyZero = true;
-    }
-    eq(anyZero, false, '前提: 候補0個のマスは存在しない');
-    var res = C.findLogicalHint(b);
-    eq(res.status, 'contradiction', '矛盾として扱う');
-    ok(res.problems.some(function (p) { return p.kind === 'unit'; }), 'ユニット由来の矛盾が含まれること');
-  });
-
-  test('ヒント：形式不正（範囲外の値・サイズ違い）は invalid', function () {
-    var b = B(FIX.nakedBoard);
-    b[3][3] = 12;
-    eq(C.findLogicalHint(b).status, 'invalid', '範囲外の値は invalid');
-    var small = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
-    eq(C.findLogicalHint(small).status, 'invalid', '9x9 でない盤面は invalid');
-    var dup = B(FIX.duplicateBoard);
-    eq(C.findLogicalHint(dup).status, 'invalid', '重複がある盤面は invalid');
-  });
-
-  test('ヒント：対応手法で一手が見つからない場合は none（解なしと断定しない）', function () {
-    // 唯一解だが裸・隠れたシングルでは進めない盤面（初期配置を減らした盤面を利用）
-    var b = B('000000000000003085001020000000507000004000100090000000500000073002010000000040009');
-    var res = C.findLogicalHint(b);
-    ok(res.status === 'none' || res.status === 'found', 'none か found のいずれか（invalid や complete ではない）: ' + res.status);
-    if (res.status === 'none') ok(res.status !== 'complete', 'none を完成扱いしないこと');
-    eq(C.classifySolveResult(C.runSync(C.solveTask(b, { limit: 2 }))) === 'none' ? 'none' : 'ok', 'ok', '前提: この盤面は解が存在する（解なしではない）');
-  });
-
-  /* ============================== 4. 候補とインポート ============================== */
-
-  test('候補計算：初期配置とユーザー入力を反映し、昇順で返す', function () {
-    var b = C.createBoard();
-    b[0][0] = 9; b[0][1] = 8; b[1][0] = 7;      // 行・列・ブロックの制約
-    var cand = C.getCandidates(b, 1, 1);
-    ok(cand.indexOf(9) < 0 && cand.indexOf(8) < 0 && cand.indexOf(7) < 0, '既存数字は候補に含まれない');
-    var sorted = cand.slice().sort(function (x, y) { return x - y; });
-    eq(cand.join(','), sorted.join(','), '候補は昇順');
-    eq(C.getCandidates(b, 0, 0).length, 0, '数字が入っているマスの候補は空');
-    // ユーザー入力を 1 つ増やすと、同じ行の別マスの候補が減ること
-    var target = -1;
-    for (var c = 2; c < 9; c++) if (b[1][c] === 0) { target = c; break; }
-    var before = C.getCandidates(b, 1, target);
-    var d = before[0];
-    b[1][3] = d;                                  // 行にユーザー数字を追加
-    var after = C.getCandidates(b, 1, target);
-    eq(after.indexOf(d), -1, '追加した数字は他のマスの候補から除かれる');
-    ok(after.length < before.length, '候補数が減ること');
-  });
-
-  test('インポート：空白除去・. と 0・不正文字・文字数の検証', function () {
-    var src = FIX.nakedBoard;
-    var spaced = '';
-    for (var i = 0; i < 81; i++) {
-      spaced += (i % 9 === 0 ? '\n' : (i % 3 === 0 ? ' ' : '')) + (i === 40 ? '.' : src.charAt(i));
-    }
-    var res = C.normalizeImport(spaced);
-    eq(res.ok, true, '空白・改行を含む入力を受け付ける');
-    var expected = B(src);
-    expected[4][4] = 0;
-    eqBoard(res.board, expected, '. は空欄として扱う');
-    eq(res.board[0][0], 8, '左上から行順に反映される');
-
-    eq(C.normalizeImport(src.replace('0', 'x')).ok, false, '不正な文字は受け付けない');
-    eq(C.normalizeImport(src.slice(0, 80)).ok, false, '80 文字は受け付けない');
-    eq(C.normalizeImport('').ok, false, '空入力は受け付けない');
-    var zeros = new Array(82).join('0');
-    var allEmpty = C.normalizeImport(zeros);
-    eq(allEmpty.ok, true, '0 だけの 81 文字は受け付ける');
-    eq(C.boardKey(allEmpty.board), zeros, 'すべて空欄として読み込む');
-    eq(allEmpty.duplicates.length, 0, '空欄だけなら重複なし');
-  });
-
-  /* ============================== 実行 ============================== */
-
-  function runOne(index) {
-    var t = tests[index];
-    var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    var out = { index: index, name: t.name, pass: true, detail: '', slow: t.slow, ms: 0 };
-    try {
-      t.fn();
-    } catch (e) {
-      out.pass = false;
-      out.detail = String(e && e.message ? e.message : e);
-    }
-    var t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    out.ms = Math.round(t1 - t0);
-    return out;
-  }
-
-  function run() {
-    var results = [];
-    for (var i = 0; i < tests.length; i++) results.push(runOne(i));
-    var passed = results.filter(function (r) { return r.pass; }).length;
-    return {
-      results: results, total: results.length, passed: passed, failed: results.length - passed,
-      ms: results.reduce(function (a, r) { return a + r.ms; }, 0)
-    };
-  }
-
-  return {
-    list: function () { return tests.map(function (t) { return { name: t.name, slow: t.slow }; }); },
-    count: function () { return tests.length; },
-    runOne: runOne,
-    run: run,
-    fixtures: FIX
-  };
-})();
-</script>
 <script id="sudoku-ui">
 /* =============================================================================
  * SudokuApp UI — 状態管理 / 描画 / 入力 / ヒント / 解析 / 保存 を担当する層
  * -----------------------------------------------------------------------------
+ * 設計の要点（盤面共有モデル）:
+ *  1) 盤面・候補メモ・Undo/Redo 履歴・選択マス・入力モードは「両モードで共有」する。
+ *     モードを切り替えても盤面自体は切り替わらない（入力・解析モードで入力した盤面が
+ *     そのままプレイモードに反映される）。
+ *  2) プレイモード固有の情報（初期配置スナップショット initialBoard・正解 solutionBoard・
+ *     問題ID・難易度・経過時間・ヒント使用回数・自動解答記録・完成状態）は、共有盤面に
+ *     「紐づく付加情報」として保持する。入力・解析モードで初期配置を書き換えると紐づけを
+ *     解除し、正解データ依存の機能（正解チェック・自動解答）を無効化する。
+ *  3) 「次の一手」は正解データが無い盤面でも論理判定のみで動作する（その旨を明示する）。
+ *  4) 唯一解と判定済みの盤面は「この盤面をプレイ問題として採用」でプレイ問題にできる。
+ *
  * 役割の分離:
  *   SudokuCore … 数独の計算（純粋関数・ジェネレータ。DOM を知らない）
- *   このファイル … 状態（プレイ／入力解析を別々に保持）、DOM 描画、イベント、
- *                  重い処理の駆動（Web Worker またはイベントループ分割）、保存
- * 重い処理は必ず識別子（app.opToken / app.verifyToken / taskId）で
- * 「古い結果を適用しない」ようにしている。
+ *   この層     … 状態、DOM 描画、イベント、重い処理の駆動、保存
+ * 重い処理は識別子（app.opToken / app.verifyToken / taskId）で古い結果を破棄する。
  * ===========================================================================*/
 (function () {
   'use strict';
@@ -1439,7 +1036,7 @@ var SudokuTests = (function () {
 
   /* ------------------------------------------------------------------ 定数 */
   var SAVE_KEY = 'sudoku-app-state';
-  var SAVE_VERSION = 2;
+  var SAVE_VERSION = 3;
   // Undo/Redo 履歴の上限。超えた場合は古い方（先頭）から破棄する。
   var HISTORY_LIMIT = 200;
   var GENERATE_TIME_LIMIT = 30000;   // 生成の制限時間(ms)
@@ -1450,7 +1047,8 @@ var SudokuTests = (function () {
   var DIFFICULTIES = {
     easy: { key: 'easy', label: 'やさしい', minClues: 40, maxClues: 46 },
     normal: { key: 'normal', label: 'ふつう', minClues: 32, maxClues: 39 },
-    hard: { key: 'hard', label: 'むずかしい', minClues: 26, maxClues: 31 }
+    hard: { key: 'hard', label: 'むずかしい', minClues: 26, maxClues: 31 },
+    custom: { key: 'custom', label: '採用した盤面', minClues: 0, maxClues: 81 }
   };
 
   /* --------------------------------------------------------------- DOM 参照 */
@@ -1460,11 +1058,11 @@ var SudokuTests = (function () {
     ['board', 'status', 'notice', 'tab-play', 'tab-analysis', 'panel-play', 'panel-analysis',
       'difficulty', 'btn-new', 'btn-reset', 'stat-id', 'stat-difficulty', 'stat-timer', 'stat-hints',
       'btn-check', 'btn-hint', 'btn-solve', 'import-text', 'btn-import', 'btn-analyze',
-      'btn-analysis-solve', 'btn-clear-board', 'analysis-result', 'hint-text', 'btn-apply-hint',
-      'btn-close-hint', 'pad', 'btn-erase', 'btn-note', 'btn-clear-notes', 'btn-undo', 'btn-redo',
-      'input-mode-indicator', 'busy-panel', 'busy-text', 'btn-cancel', 'completion-panel',
-      'completion-text', 'btn-run-tests', 'test-summary', 'test-results',
-      'confirm-dialog', 'confirm-text', 'confirm-ok', 'confirm-cancel', 'main'].forEach(function (id) {
+      'btn-analysis-solve', 'btn-adopt', 'btn-clear-board', 'analysis-result', 'hint-text',
+      'btn-apply-hint', 'btn-close-hint', 'pad', 'btn-erase', 'btn-note', 'btn-clear-notes',
+      'btn-undo', 'btn-redo', 'input-mode-indicator', 'busy-panel', 'busy-text', 'btn-cancel',
+      'completion-panel', 'completion-text', 'confirm-dialog', 'confirm-text', 'confirm-ok',
+      'confirm-cancel', 'main', 'shared-note'].forEach(function (id) {
         el[id] = $(id);
       });
   }
@@ -1485,48 +1083,61 @@ var SudokuTests = (function () {
     tickCount: 0
   };
 
-  function newPlayState() {
+  // 共有盤面（両モードで同一のオブジェクトを使う）
+  var board = C.createBoard();
+  var notes = C.createNotes();
+  var history = { undo: [], redo: [] };
+  var view = { selected: { r: 0, c: 0 }, inputMode: 'digit' };
+
+  // プレイモード固有（共有盤面に紐づく付加情報）
+  function newPlayMeta() {
     return {
-      puzzleId: null, difficulty: 'easy',
-      initialBoard: null, userBoard: null, solutionBoard: null, notes: C.createNotes(),
-      selected: { r: 0, c: 0 }, inputMode: 'digit',
+      initialBoard: null, solutionBoard: null, puzzleId: null, difficulty: 'easy',
       elapsedMs: 0, hintCount: 0, revealedHintKeys: {}, autoSolved: false,
-      checkActive: false, checkWrong: {}, completed: false, hint: null,
-      solutionVerified: false, undo: [], redo: []
+      checkActive: false, completed: false, hint: null, solutionVerified: false
     };
   }
-  function newAnalysisState() {
-    return {
-      board: C.createBoard(), notes: C.createNotes(), selected: { r: 0, c: 0 },
-      inputMode: 'digit', undo: [], redo: [], result: null
-    };
-  }
-  var play = newPlayState();
-  var analysis = newAnalysisState();
+  var play = newPlayMeta();
+  var analysis = { result: null };
 
   var timer = { running: false, startTs: 0, intervalId: null };
 
-  function current() { return app.mode === 'play' ? play : analysis; }
-  function compositeBoard() {
-    var b = C.createBoard();
-    if (!play.initialBoard) return b;                       // 問題が未生成のときは空盤面を返す
+  function boardKey() { return C.boardKey(board); }
+  function inPlay() { return app.mode === 'play'; }
+
+  /* ------------------------------------------- 共有盤面と問題の紐づけ */
+  /** 正解データ（正解盤面）を持つ問題が共有盤面に紐づいているか。 */
+  function puzzleAttached() { return !!(play.initialBoard && play.solutionBoard); }
+  /** 紐づけが有効か＝初期配置マスが保存された初期配置のままであること。 */
+  function associationValid() {
+    if (!play.initialBoard) return false;
     for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
-      b[r][c] = play.initialBoard[r][c] !== 0 ? play.initialBoard[r][c] : play.userBoard[r][c];
+      if (play.initialBoard[r][c] !== 0 && board[r][c] !== play.initialBoard[r][c]) return false;
     }
-    return b;
+    return true;
   }
-  function boardOf(st) { return st === play ? compositeBoard() : analysis.board; }
+  /** 正解データ依存の機能（正解チェック・自動解答）が使えるか。 */
+  function solutionUsable() { return puzzleAttached() && associationValid() && play.solutionVerified; }
+  /**
+   * 共有盤面が初期配置から変わったとき、問題との紐づけを解除する。
+   * 盤面そのものは破棄しない（ユーザーの入力を失わない）。
+   */
+  function detachPuzzle(reason) {
+    var had = puzzleAttached();
+    play.initialBoard = null;
+    play.solutionBoard = null;
+    play.puzzleId = null;
+    play.hint = null;
+    play.checkActive = false;
+    play.completed = false;
+    play.solutionVerified = false;
+    clearCompletion();
+    if (had && reason) notify(reason);
+    return had;
+  }
 
   /* ----------------------------------------------------- 履歴（Undo/Redo） */
-  function snapshotOf(st) {
-    return st === play
-      ? { user: C.cloneBoard(play.userBoard), notes: C.cloneNotes(play.notes) }
-      : { board: C.cloneBoard(analysis.board), notes: C.cloneNotes(analysis.notes) };
-  }
-  function restoreSnapshot(st, snap) {
-    if (st === play) { play.userBoard = C.cloneBoard(snap.user); play.notes = C.cloneNotes(snap.notes); }
-    else { analysis.board = C.cloneBoard(snap.board); analysis.notes = C.cloneNotes(snap.notes); }
-  }
+  function snapshot() { return { board: C.cloneBoard(board), notes: C.cloneNotes(notes) }; }
   function sameNotes(a, b) {
     for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
       var x = a[r][c] || [], y = b[r][c] || [];
@@ -1535,40 +1146,38 @@ var SudokuTests = (function () {
     }
     return true;
   }
-  function sameSnapshot(st, snap) {
-    return st === play
-      ? C.sameBoard(play.userBoard, snap.user) && sameNotes(play.notes, snap.notes)
-      : C.sameBoard(analysis.board, snap.board) && sameNotes(analysis.notes, snap.notes);
+  function sameSnapshot(snap) {
+    return C.sameBoard(board, snap.board) && sameNotes(notes, snap.notes);
   }
   /** 変化があるときだけ 1 操作として履歴に積む（同じ状態への再入力では積まない）。 */
-  function pushHistory(st, snap) {
-    if (sameSnapshot(st, snap)) return false;
-    st.undo.push(snap);
-    if (st.undo.length > HISTORY_LIMIT) st.undo.shift();   // 上限超過は古い方から破棄
-    st.redo.length = 0;                                    // 新しい編集で Redo 履歴を破棄
+  function pushHistory(snap) {
+    if (sameSnapshot(snap)) return false;
+    history.undo.push(snap);
+    if (history.undo.length > HISTORY_LIMIT) history.undo.shift();   // 上限超過は古い方から破棄
+    history.redo.length = 0;                                         // 新しい編集で Redo 履歴を破棄
     return true;
   }
   function doUndo() {
-    var st = current();
-    if (app.busy || st.undo.length === 0) return;
-    var cur = snapshotOf(st);
-    var prev = st.undo.pop();
-    st.redo.push(cur);
-    if (st.redo.length > HISTORY_LIMIT) st.redo.shift();
-    restoreSnapshot(st, prev);
-    clearHint('Undo したため、表示していたヒントを解除しました。', true);
-    afterEdit(st, 'Undo しました。');
+    if (app.busy || history.undo.length === 0) return;
+    var cur = snapshot();
+    var prev = history.undo.pop();
+    history.redo.push(cur);
+    if (history.redo.length > HISTORY_LIMIT) history.redo.shift();
+    board = C.cloneBoard(prev.board);
+    notes = C.cloneNotes(prev.notes);
+    if (play.hint) { play.hint = null; setStatus('Undo したため、表示していたヒントを解除しました。'); }
+    afterEdit('Undo しました。');
   }
   function doRedo() {
-    var st = current();
-    if (app.busy || st.redo.length === 0) return;
-    var cur = snapshotOf(st);
-    var next = st.redo.pop();
-    st.undo.push(cur);
-    if (st.undo.length > HISTORY_LIMIT) st.undo.shift();
-    restoreSnapshot(st, next);
-    clearHint('Redo したため、表示していたヒントを解除しました。', true);
-    afterEdit(st, 'Redo しました。');
+    if (app.busy || history.redo.length === 0) return;
+    var cur = snapshot();
+    var next = history.redo.pop();
+    history.undo.push(cur);
+    if (history.undo.length > HISTORY_LIMIT) history.undo.shift();
+    board = C.cloneBoard(next.board);
+    notes = C.cloneNotes(next.notes);
+    if (play.hint) { play.hint = null; setStatus('Redo したため、表示していたヒントを解除しました。'); }
+    afterEdit('Redo しました。');
   }
 
   /* ------------------------------------------------------------ 状態通知 */
@@ -1717,8 +1326,7 @@ var SudokuTests = (function () {
   function updateTimerDisplay() { el['stat-timer'].textContent = fmtTime(currentElapsed()); }
   /** 計測条件: プレイモード表示中・ページ可視・未完成・重い処理中でないこと。 */
   function updateTimerState() {
-    var should = app.mode === 'play' && !!play.puzzleId && !play.completed &&
-      !document.hidden && !app.busy;
+    var should = inPlay() && !!play.puzzleId && !play.completed && !document.hidden && !app.busy;
     if (should && !timer.running) { timer.running = true; timer.startTs = Date.now(); }
     else if (!should && timer.running) { play.elapsedMs = currentElapsed(); timer.running = false; timer.startTs = 0; }
     updateTimerDisplay();
@@ -1752,20 +1360,20 @@ var SudokuTests = (function () {
         cell.setAttribute('tabindex', '-1');
         var value = document.createElement('span');
         value.className = 'value';
-        var notes = document.createElement('span');
-        notes.className = 'notes';
-        notes.setAttribute('aria-hidden', 'true');             // 候補は aria-label で読み上げる
+        var noteWrap = document.createElement('span');
+        noteWrap.className = 'notes';
+        noteWrap.setAttribute('aria-hidden', 'true');           // 候補は aria-label で読み上げる
         for (var d = 1; d <= 9; d++) {
           var s = document.createElement('span');
           s.setAttribute('data-d', d);
-          notes.appendChild(s);
+          noteWrap.appendChild(s);
         }
         cell.appendChild(value);
-        cell.appendChild(notes);
+        cell.appendChild(noteWrap);
         rowEl.appendChild(cell);
         cellEls[r * 9 + c] = cell;
         valueEls[r * 9 + c] = value;
-        noteEls[r * 9 + c] = notes.children;
+        noteEls[r * 9 + c] = noteWrap.children;
       }
       el.board.appendChild(rowEl);
     }
@@ -1804,19 +1412,17 @@ var SudokuTests = (function () {
   }
 
   function renderBoard() {
-    var st = current();
-    var board = boardOf(st);
     var dupMap = {};
     C.findDuplicates(board).forEach(function (i) { dupMap[i] = true; });
     var wrongMap = {};
-    if (app.mode === 'play' && play.checkActive && play.solutionBoard) {
+    if (inPlay() && play.checkActive && puzzleAttached()) {
       for (var i0 = 0; i0 < 81; i0++) {
         var r0 = (i0 / 9) | 0, c0 = i0 % 9, v0 = board[r0][c0];
         if (v0 !== 0 && v0 !== play.solutionBoard[r0][c0]) wrongMap[i0] = true;
       }
     }
-    var sel = st.selected, selIdx = sel.r * 9 + sel.c, selVal = board[sel.r][sel.c];
-    var hint = (app.mode === 'play') ? play.hint : null;
+    var sel = view.selected, selIdx = sel.r * 9 + sel.c, selVal = board[sel.r][sel.c];
+    var hint = inPlay() ? play.hint : null;
     var hintUnitMap = {};
     if (hint && hint.units) {
       hint.units.forEach(function (u) {
@@ -1825,10 +1431,10 @@ var SudokuTests = (function () {
     }
     for (var i = 0; i < 81; i++) {
       var r = (i / 9) | 0, c = i % 9, v = board[r][c];
-      var isInitial = (app.mode === 'play' && !!play.initialBoard && play.initialBoard[r][c] !== 0);
-      var notes = (st.notes[r][c] || []);
+      var locked = !isEditable(r, c);                          // プレイモードの初期配置は編集不可
+      var noteList = (notes[r][c] || []);
       var cls = 'cell';
-      if (isInitial) cls += ' initial'; else if (v !== 0) cls += ' user';
+      if (locked) cls += ' initial'; else if (v !== 0) cls += ' user';
       if (i === selIdx) cls += ' selected';
       else if (r === sel.r || c === sel.c || C.boxIndex(r, c) === C.boxIndex(sel.r, sel.c)) cls += ' related';
       if (selVal !== 0 && v === selVal && i !== selIdx) cls += ' same-digit';
@@ -1841,28 +1447,28 @@ var SudokuTests = (function () {
       var text = v ? String(v) : '';
       if (valueEls[i].textContent !== text) valueEls[i].textContent = text;
       for (var d = 1; d <= 9; d++) {
-        var nt = (v === 0 && notes.indexOf(d) >= 0) ? String(d) : '';
+        var nt = (v === 0 && noteList.indexOf(d) >= 0) ? String(d) : '';
         if (noteEls[i][d - 1].textContent !== nt) noteEls[i][d - 1].textContent = nt;
       }
       // マスの読み上げ用ラベル（行・列・数字・候補・編集可否・選択・エラー・ヒント対象）
       var parts = [(r + 1) + '行' + (c + 1) + '列'];
-      if (v) { parts.push('数字' + v); parts.push(isInitial ? '初期配置' : '入力値'); }
-      else { parts.push('空欄'); parts.push('編集可能'); }
-      if (!v && notes.length) parts.push('候補 ' + notes.join(' '));
+      if (v) { parts.push('数字' + v); parts.push(locked ? '初期配置' : '入力値'); }
+      else { parts.push('空欄'); parts.push(locked ? '編集不可' : '編集可能'); }
+      if (!v && noteList.length) parts.push('候補 ' + noteList.join(' '));
       if (i === selIdx) parts.push('選択中');
       if (dupMap[i]) parts.push('重複');
       if (wrongMap[i]) parts.push('正解と不一致');
       if (hint && hint.row === r && hint.col === c) parts.push('次の一手の対象');
       cell.setAttribute('aria-label', parts.join('、'));
       cell.setAttribute('aria-selected', i === selIdx ? 'true' : 'false');
-      cell.setAttribute('aria-readonly', isInitial ? 'true' : 'false');
+      cell.setAttribute('aria-readonly', locked ? 'true' : 'false');
       var ti = (i === selIdx) ? '0' : '-1';
       if (cell.getAttribute('tabindex') !== ti) cell.setAttribute('tabindex', ti);
     }
   }
 
   function renderHint() {
-    var h = (app.mode === 'play') ? play.hint : null;
+    var h = inPlay() ? play.hint : null;
     if (!h) {
       el['hint-text'].textContent = '「次の一手」を押すと、いまの盤面から論理的に確定できる一手と、その理由を表示します。';
       el['btn-apply-hint'].disabled = true;
@@ -1875,6 +1481,7 @@ var SudokuTests = (function () {
     lines.push('理由：' + h.reason);
     lines.push('このマスの論理候補：' + (h.candidates.length ? h.candidates.join('、') : '（なし）'));
     lines.push('根拠：' + h.units.map(function (u) { return u.label; }).join('、'));
+    if (h.noSolutionCheck) lines.push('※ この盤面には正解データが無いため、正解との照合は行わず論理判定のみで提示しています。');
     el['hint-text'].textContent = lines.join('\n');
     el['btn-apply-hint'].disabled = app.busy;
     el['btn-close-hint'].disabled = app.busy;
@@ -1882,7 +1489,7 @@ var SudokuTests = (function () {
 
   function renderPlayInfo() {
     el['stat-id'].textContent = play.puzzleId || '—';
-    el['stat-difficulty'].textContent = play.puzzleId && DIFFICULTIES[play.difficulty]
+    el['stat-difficulty'].textContent = (play.puzzleId && DIFFICULTIES[play.difficulty])
       ? DIFFICULTIES[play.difficulty].label : '—';
     el['stat-hints'].textContent = play.hintCount + ' 回';
     updateTimerDisplay();
@@ -1902,15 +1509,16 @@ var SudokuTests = (function () {
       format_error: '入力形式エラー', duplicate: '重複あり', error: 'エラー'
     };
     var text = '解析結果：' + (labels[r.status] || r.status) + '\n' + r.message;
-    if (C.boardKey(analysis.board) !== r.boardKey) {
+    if (boardKey() !== r.boardKey) {
       text += '\n※ 解析後に入力盤面が変更されたため、この結果は適用できません。もう一度「解析」を実行してください。';
+    } else if (r.status === 'unique') {
+      text += '\n※ 「この盤面をプレイ問題として採用」を押すと、この盤面をプレイモードの問題として扱えます（正解チェック・自動解答が使えるようになります）。';
     }
     el['analysis-result'].textContent = text;
   }
 
   function renderInputMode() {
-    var st = current();
-    var note = st.inputMode === 'note';
+    var note = view.inputMode === 'note';
     el['btn-note'].setAttribute('aria-pressed', note ? 'true' : 'false');
     el['input-mode-indicator'].setAttribute('data-mode', note ? 'note' : 'digit');
     el['input-mode-indicator'].textContent = note
@@ -1923,40 +1531,60 @@ var SudokuTests = (function () {
   }
 
   function updateTabs() {
-    var isPlay = app.mode === 'play';
+    var isPlay = inPlay();
     el['tab-play'].setAttribute('aria-selected', isPlay ? 'true' : 'false');
     el['tab-analysis'].setAttribute('aria-selected', isPlay ? 'false' : 'true');
     el['tab-play'].setAttribute('tabindex', isPlay ? '0' : '-1');
     el['tab-analysis'].setAttribute('tabindex', isPlay ? '-1' : '0');
     el['panel-play'].hidden = !isPlay;
     el['panel-analysis'].hidden = isPlay;
+    el['shared-note'].textContent = isPlay
+      ? '盤面・候補メモ・履歴は入力・解析モードと共有しています。切り替えても盤面は変わりません。'
+      : '盤面・候補メモ・履歴はプレイモードと共有しています。ここで入力した盤面はそのままプレイモードに反映されます。';
+  }
+
+  function canAdopt() {
+    var r = analysis.result;
+    return !!(r && r.status === 'unique' && r.solution && r.boardKey === boardKey());
   }
 
   function updateControls() {
-    var inPlay = app.mode === 'play';
-    var hasPuzzle = !!play.puzzleId;
-    var ready = hasPuzzle && play.solutionVerified;     // 検証済みの問題だけ正解依存機能を許可
-    var st = current();
+    var isPlay = inPlay();
     var busy = app.busy;
+    var attached = puzzleAttached();
+    var sol = solutionUsable();
     el['btn-new'].disabled = busy;
     el['difficulty'].disabled = busy;
-    el['btn-reset'].disabled = busy || !hasPuzzle || !inPlay;
-    el['btn-check'].disabled = busy || !ready || !inPlay;
-    el['btn-hint'].disabled = busy || !ready || !inPlay;
-    el['btn-solve'].disabled = busy || !ready || !inPlay;
-    el['btn-apply-hint'].disabled = busy || !(play.hint && inPlay);
-    el['btn-close-hint'].disabled = busy || !(play.hint && inPlay);
-    el['btn-undo'].disabled = busy || st.undo.length === 0;
-    el['btn-redo'].disabled = busy || st.redo.length === 0;
+    el['btn-reset'].disabled = busy || (!attached && !anyValue());
+    el['btn-check'].disabled = busy || !isPlay || !sol;
+    el['btn-hint'].disabled = busy || !isPlay;              // 論理判定のみでも動作する
+    el['btn-solve'].disabled = busy || !isPlay || !sol;
+    el['btn-apply-hint'].disabled = busy || !(play.hint && isPlay);
+    el['btn-close-hint'].disabled = busy || !(play.hint && isPlay);
+    el['btn-undo'].disabled = busy || history.undo.length === 0;
+    el['btn-redo'].disabled = busy || history.redo.length === 0;
     el['btn-import'].disabled = busy;
     el['btn-analyze'].disabled = busy;
-    el['btn-analysis-solve'].disabled = busy || !analysis.result || inPlay;
+    el['btn-analysis-solve'].disabled = busy || isPlay || !analysis.result ||
+      (analysis.result.status !== 'unique' && analysis.result.status !== 'multiple');
+    el['btn-adopt'].disabled = busy || isPlay || !canAdopt();
     el['btn-clear-board'].disabled = busy;
     el['btn-erase'].disabled = busy;
     el['btn-note'].disabled = busy;
     el['btn-clear-notes'].disabled = busy;
     for (var d = 1; d <= 9; d++) padBtns[d].disabled = busy;
     padBtns.erase.disabled = busy;
+    // 正解データ依存のボタンには理由を読み上げ/ツールチップで示す
+    var why = !attached
+      ? '正解データがありません。新しい問題を生成するか、入力・解析モードで唯一解を確認して「この盤面をプレイ問題として採用」してください。'
+      : (!play.solutionVerified ? '保存データの検証中です。' : '');
+    el['btn-check'].title = why;
+    el['btn-solve'].title = why;
+  }
+
+  function anyValue() {
+    for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) if (board[r][c] !== 0) return true;
+    return false;
   }
 
   function renderAll() {
@@ -1970,14 +1598,14 @@ var SudokuTests = (function () {
   }
 
   /* ---------------------------------------------------------- 選択と入力 */
-  function isEditable(st, r, c) {
-    if (app.mode === 'play') return !!(play.initialBoard && play.initialBoard[r][c] === 0);
-    return true;
+  /** プレイモードでは、紐づいた問題の初期配置マスを編集不可にする。 */
+  function isEditable(r, c) {
+    if (!inPlay()) return true;                              // 入力・解析モードは全マス編集可
+    return !(play.initialBoard && play.initialBoard[r][c] !== 0);
   }
   function selectCell(r, c, focus) {
     if (r < 0 || r > 8 || c < 0 || c > 8) return;
-    var st = current();
-    st.selected = { r: r, c: c };
+    view.selected = { r: r, c: c };
     renderBoard();
     updateControls();
     if (focus) {
@@ -1986,19 +1614,18 @@ var SudokuTests = (function () {
     }
   }
   function moveSelection(dr, dc) {
-    var st = current();
-    var r = Math.min(8, Math.max(0, st.selected.r + dr));
-    var c = Math.min(8, Math.max(0, st.selected.c + dc));
-    selectCell(r, c, true);
+    selectCell(Math.min(8, Math.max(0, view.selected.r + dr)),
+      Math.min(8, Math.max(0, view.selected.c + dc)), true);
   }
-  function setDigit(st, r, c, v) {
-    if (st === play) play.userBoard[r][c] = v; else analysis.board[r][c] = v;
-  }
-  function afterEdit(st, message) {
-    // ヒントは「数字盤面が変わったとき」だけ解除する（候補メモだけの変更では保持）
-    if (app.mode === 'play' && play.hint) {
-      var changed = C.boardKey(compositeBoard()) !== play.hint.boardKey;
-      if (changed) clearHint('盤面が変わったため、表示していたヒントを解除しました。', true);
+  function afterEdit(message) {
+    // 数字盤面が変わったときだけヒントを解除する（候補メモだけの変更では保持）
+    if (play.hint && boardKey() !== play.hint.boardKey) {
+      play.hint = null;
+      setStatus('盤面が変わったため、表示していたヒントを解除しました。');
+    }
+    // 共有盤面が初期配置から変わったら、問題との紐づけを解除する
+    if (puzzleAttached() && !associationValid()) {
+      detachPuzzle('入力・解析モードで初期配置が変更されたため、生成した問題との対応付けを解除しました。正解チェックと自動解答は使えません（「次の一手」は論理判定のみで動作します）。盤面の入力はそのまま残しています。');
     }
     updateDerived();
     renderAll();
@@ -2006,35 +1633,30 @@ var SudokuTests = (function () {
     save();
     if (message) setStatus(message);
   }
-  /** 派生状態（重複・完成・チェック表示・解析結果の有効性）を盤面から再計算する。 */
+  /** 派生状態（重複・完成・チェック表示）を共有盤面から再計算する。 */
   function updateDerived() {
-    if (app.mode === 'play') {
-      if (!play.puzzleId) return;
-      var b = compositeBoard();
-      var done = C.isCompleteValid(b) && play.solutionBoard && C.sameBoard(b, play.solutionBoard);
+    if (inPlay()) {
+      var done = C.isCompleteValid(board) &&
+        (!puzzleAttached() || C.sameBoard(board, play.solutionBoard));
       if (done && !play.completed) { play.completed = true; onCompleted(); }
       else if (!done && play.completed) { play.completed = false; clearCompletion(); }
-      if (play.checkActive) {
+      if (play.checkActive && puzzleAttached()) {
         var wrong = 0;
         for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
-          var v = b[r][c];
+          var v = board[r][c];
           if (v !== 0 && v !== play.solutionBoard[r][c]) wrong++;
         }
-        var dupCount = C.findDuplicates(b).length;
+        var dupCount = C.findDuplicates(board).length;
         var msg = wrong === 0
           ? '正解チェック：入力済みの数字はすべて正解です（空欄は判定していません）。'
           : '正解チェック：正解と異なるマスが ' + wrong + ' 個あります（正解の数字は表示しません）。';
         if (dupCount) msg += ' なお、重複しているマスが ' + dupCount + ' 個あります。';
         setStatus(msg);
-      } else {
-        var dups = C.findDuplicates(b).length;
-        if (dups) setStatus('重複しているマスが ' + dups + ' 個あります（同じ行・列・ブロックに同じ数字）。初期配置も含めて表示しています。');
+        return;
       }
-    } else {
-      var d2 = C.findDuplicates(analysis.board).length;
-      if (d2) setStatus('重複しているマスが ' + d2 + ' 個あります。解析は形式と重複を確認してから実行してください。');
-      renderAnalysis();
     }
+    var dups = C.findDuplicates(board).length;
+    if (dups) setStatus('重複しているマスが ' + dups + ' 個あります（同じ行・列・ブロックに同じ数字）。' + (inPlay() ? '初期配置も含めて表示しています。' : '解析は形式と重複を確認してから実行してください。'));
   }
   function onCompleted() {
     updateTimerState();                                       // 完成でタイマー停止
@@ -2056,28 +1678,27 @@ var SudokuTests = (function () {
   /** 数字ボタン／キーボードからの入力。 */
   function inputDigit(d) {
     if (app.busy) return;
-    var st = current(), r = st.selected.r, c = st.selected.c;
-    if (!isEditable(st, r, c)) {
-      setStatus('初期配置の数字は変更できません（消去もできません）。');
+    var r = view.selected.r, c = view.selected.c;
+    if (!isEditable(r, c)) {
+      setStatus('初期配置の数字は変更できません（消去もできません）。入力・解析モードに切り替えると変更できます。');
       return;
     }
-    var board = boardOf(st);
-    if (st.inputMode === 'note') {
+    if (view.inputMode === 'note') {
       if (board[r][c] !== 0) { setStatus('数字が入っているマスには候補メモを入力できません。数字を消去するか、Undo で戻してください。'); return; }
-      var snap = snapshotOf(st);
-      var list = st.notes[r][c];
+      var snap = snapshot();
+      var list = notes[r][c];
       var idx = list.indexOf(d);
       if (idx >= 0) list.splice(idx, 1); else { list.push(d); list.sort(function (a, b) { return a - b; }); }
-      if (pushHistory(st, snap)) afterEdit(st, idx >= 0 ? '候補メモから ' + d + ' を削除しました。' : '候補メモに ' + d + ' を追加しました。');
+      if (pushHistory(snap)) afterEdit(idx >= 0 ? '候補メモから ' + d + ' を削除しました。' : '候補メモに ' + d + ' を追加しました。');
       else renderAll();
     } else {
       if (board[r][c] === d) { renderAll(); return; }         // 同じ状態への再入力では履歴を増やさない
-      var snap2 = snapshotOf(st);
-      setDigit(st, r, c, d);
-      st.notes[r][c] = [];                                    // 確定数字を入れたら候補メモは削除（1 操作）
-      if (pushHistory(st, snap2)) {
-        var dupNow = C.findDuplicates(boardOf(st)).length;
-        afterEdit(st, dupNow
+      var snap2 = snapshot();
+      board[r][c] = d;
+      notes[r][c] = [];                                       // 確定数字を入れたら候補メモは削除（1 操作）
+      if (pushHistory(snap2)) {
+        var dupNow = C.findDuplicates(board).length;
+        afterEdit(dupNow
           ? (r + 1) + '行' + (c + 1) + '列に ' + d + ' を入力しました。重複があるため、重複マスを確認してください。'
           : (r + 1) + '行' + (c + 1) + '列に ' + d + ' を入力しました。');
       } else renderAll();
@@ -2086,42 +1707,38 @@ var SudokuTests = (function () {
   /** 消去（通常入力モードでは数字、候補メモ入力モードでは候補を消す）。 */
   function eraseSelected() {
     if (app.busy) return;
-    var st = current(), r = st.selected.r, c = st.selected.c;
-    if (!isEditable(st, r, c)) { setStatus('初期配置の数字は消去できません。'); return; }
-    var snap = snapshotOf(st);
-    if (st.inputMode === 'note') st.notes[r][c] = [];
-    else setDigit(st, r, c, 0);                               // 数字の消去では以前の候補は復元しない
-    if (pushHistory(st, snap)) afterEdit(st, '選択マスを消去しました。以前の候補メモは Undo で戻せます。');
+    var r = view.selected.r, c = view.selected.c;
+    if (!isEditable(r, c)) { setStatus('初期配置の数字は消去できません。入力・解析モードに切り替えると変更できます。'); return; }
+    var snap = snapshot();
+    if (view.inputMode === 'note') notes[r][c] = [];
+    else board[r][c] = 0;                                     // 数字の消去では以前の候補は復元しない
+    if (pushHistory(snap)) afterEdit('選択マスを消去しました。以前の候補メモは Undo で戻せます。');
     else renderAll();
   }
   function clearSelectedNotes() {
     if (app.busy) return;
-    var st = current(), r = st.selected.r, c = st.selected.c;
-    var snap = snapshotOf(st);
-    st.notes[r][c] = [];
-    if (pushHistory(st, snap)) afterEdit(st, '選択マスの候補メモをすべて消去しました。');
+    var r = view.selected.r, c = view.selected.c;
+    var snap = snapshot();
+    notes[r][c] = [];
+    if (pushHistory(snap)) afterEdit('選択マスの候補メモをすべて消去しました。');
     else renderAll();
   }
   function toggleInputMode() {
-    var st = current();
-    st.inputMode = st.inputMode === 'note' ? 'digit' : 'note';
+    view.inputMode = view.inputMode === 'note' ? 'digit' : 'note';
     renderInputMode();
     updateControls();
     save();
-    setStatus(st.inputMode === 'note'
-      ? '候補メモ入力モードに切り替えました。'
-      : '数字入力モードに切り替えました。');
+    setStatus(view.inputMode === 'note' ? '候補メモ入力モードに切り替えました。' : '数字入力モードに切り替えました。');
   }
 
   /* ------------------------------------------------------------ ヒント */
-  function clearHint(message, quiet) {
-    var had = (app.mode === 'play' && play.hint) || (app.mode === 'analysis' && false);
+  function clearHint(message) {
+    var had = !!play.hint;
     play.hint = null;
     renderHint();
     renderBoard();
     updateControls();
-    if (message && !quiet) setStatus(message);
-    if (message && quiet) setStatus(message);
+    if (message) setStatus(message);
     return had;
   }
   function hintKey(h) {
@@ -2130,86 +1747,78 @@ var SudokuTests = (function () {
   }
   function requestHint() {
     if (app.busy) { setStatus('処理中です。完了するかキャンセルしてからお試しください。'); return; }
-    if (app.mode !== 'play') { setStatus('「次の一手」はプレイモードでのみ使用できます。'); return; }
-    if (!play.puzzleId) { setStatus('問題がありません。「新しい問題」で生成してください。'); return; }
-    if (!play.solutionVerified) {
-      setStatus('正解データを検証中です（またはデータに問題があります）。検証が終わるまで「次の一手」は使用できません。');
-      return;
-    }
-    var board = compositeBoard();
+    if (!inPlay()) { setStatus('「次の一手」はプレイモードでのみ使用できます。'); return; }
+    if (!anyValue()) { setStatus('盤面が空です。問題を生成するか、入力・解析モードで盤面を入力してください。'); return; }
     // 1) 形式の検証
-    if (!C.isValidBoardShape(board)) { notify('盤面データの形式が不正です。データの再検証が必要です。'); return; }
+    if (!C.isValidBoardShape(board)) { notify('盤面データの形式が不正です。'); return; }
     // 2) 重複の確認
     if (C.hasDuplicates(board)) {
       setStatus('重複エラーを修正してから、次の一手を利用してください。');
-      clearHint(null, true);
+      clearHint(null);
       return;
     }
-    // 3) 正解との照合（この安全確認のためだけに solutionBoard を参照する）
-    var mismatch = 0;
-    for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
-      var v = board[r][c];
-      if (v !== 0 && v !== play.solutionBoard[r][c]) mismatch++;
-    }
-    if (mismatch > 0) {
-      setStatus('現在の入力に誤りがあります。正解チェックで確認してから、次の一手を利用してください。');
-      clearHint(null, true);
-      return;
+    // 3) 正解データがある場合は正解と照合する（この安全確認のためだけに solutionBoard を参照する）
+    var noSolutionCheck = false;
+    if (puzzleAttached() && associationValid()) {
+      var mismatch = 0;
+      for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
+        var v = board[r][c];
+        if (v !== 0 && v !== play.solutionBoard[r][c]) mismatch++;
+      }
+      if (mismatch > 0) {
+        setStatus('現在の入力に誤りがあります。正解チェックで確認してから、次の一手を利用してください。');
+        clearHint(null);
+        return;
+      }
+    } else {
+      noSolutionCheck = true;                                 // 正解データが無い盤面は論理判定のみ
     }
     // 4) 完成している場合は完成通知
-    if (C.isCompleteValid(board)) {
-      setStatus('盤面は完成しています。');
-      clearHint(null, true);
-      return;
-    }
+    if (C.isCompleteValid(board)) { setStatus('盤面は完成しています。'); clearHint(null); return; }
     // 5) 論理ヒントの検索（盤面と候補のみを使う純粋関数）
     var res = C.findLogicalHint(board);
-    if (res.status === 'complete') { setStatus('盤面は完成しています。'); clearHint(null, true); return; }
-    if (res.status === 'invalid') { notify('次の一手を提示できません：' + res.reason); clearHint(null, true); return; }
+    if (res.status === 'complete') { setStatus('盤面は完成しています。'); clearHint(null); return; }
+    if (res.status === 'invalid') { notify('次の一手を提示できません：' + res.reason); clearHint(null); return; }
     if (res.status === 'contradiction') {
-      notify('盤面の状態に矛盾を検出しました（候補が 0 個のマス、または置ける場所が無い数字があります）。本来は発生しない状態のため、データの再検証をおすすめします。次の一手は提示しません。');
-      clearHint(null, true);
+      notify('盤面の状態に矛盾を検出しました（候補が 0 個のマス、または置ける場所が無い数字があります）。次の一手は提示しません。');
+      clearHint(null);
       return;
     }
     if (res.status === 'none') {
-      clearHint(null, true);
+      clearHint(null);
       setStatus('現在の盤面では、対応している論理手法で確定できる次の一手が見つかりませんでした。より高度な手法が必要な可能性があります（解なしや、論理的に解けないという意味ではありません）。');
       return;
     }
     // 発見：使用回数の加算は「同一問題・同一盤面・同一の一手」で 1 回だけ
     var h = {
-      puzzleId: play.puzzleId, boardKey: C.boardKey(board),
+      puzzleId: play.puzzleId || '(なし)', boardKey: boardKey(),
       row: res.row, col: res.col, digit: res.digit,
       technique: res.technique, techniqueName: res.techniqueName,
-      candidates: res.candidates.slice(), units: res.units.slice(), reason: res.reason
+      candidates: res.candidates.slice(), units: res.units.slice(), reason: res.reason,
+      noSolutionCheck: noSolutionCheck
     };
     var key = hintKey(h);
     var isNew = !Object.prototype.hasOwnProperty.call(play.revealedHintKeys, key);
-    if (isNew) {
-      play.revealedHintKeys[key] = true;
-      play.hintCount++;
-      save();
-    }
+    if (isNew) { play.revealedHintKeys[key] = true; play.hintCount++; save(); }
     play.hint = h;
     renderHint();
     renderBoard();
     renderPlayInfo();
     updateControls();
-    setStatus('次の一手を表示しました（' + h.techniqueName + '）。' + (isNew ? 'ヒント使用回数を 1 増やしました。' : 'この一手は表示済みのため、使用回数は増えていません。'));
+    setStatus('次の一手を表示しました（' + h.techniqueName + '）。' + (isNew ? 'ヒント使用回数を 1 増やしました。' : 'この一手は表示済みのため、使用回数は増えていません。')
+      + (noSolutionCheck ? ' ※ この盤面には正解データが無いため、正解との照合は行っていません。' : ''));
   }
   /** 表示中のヒントを適用（数字入力＋候補削除を 1 操作として記録）。 */
   function applyHint() {
     if (app.busy) return;
     var h = play.hint;
     if (!h) { setStatus('適用できるヒントがありません。'); return; }
-    if (app.mode !== 'play') { clearHint('モードが変わったため、表示していたヒントを解除しました。'); return; }
-    if (h.puzzleId !== play.puzzleId) { clearHint('問題が変わったため、表示していたヒントを解除しました。もう一度取得してください。'); return; }
-    var board = compositeBoard();
-    if (C.boardKey(board) !== h.boardKey) {
+    if (!inPlay()) { clearHint('モードが変わったため、表示していたヒントを解除しました。'); return; }
+    if (boardKey() !== h.boardKey) {
       clearHint('盤面が変わったため、表示していたヒントを解除しました。もう一度取得してください。');
       return;
     }
-    if (board[h.row][h.col] !== 0 || play.initialBoard[h.row][h.col] !== 0) {
+    if (board[h.row][h.col] !== 0 || !isEditable(h.row, h.col)) {
       clearHint('対象マスが編集できない状態になったため、ヒントを解除しました。');
       return;
     }
@@ -2220,24 +1829,26 @@ var SudokuTests = (function () {
       clearHint('再判定の結果が変わったため、適用しませんでした。もう一度「次の一手」を取得してください。');
       return;
     }
-    var snap = snapshotOf(play);
-    play.userBoard[h.row][h.col] = h.digit;
-    play.notes[h.row][h.col] = [];                            // 対象マスの候補メモだけを削除
+    var snap = snapshot();
+    board[h.row][h.col] = h.digit;
+    notes[h.row][h.col] = [];                                 // 対象マスの候補メモだけを削除
     play.hint = null;                                         // 適用後はヒントを解除（二重適用の防止）
-    pushHistory(play, snap);
-    afterEdit(play, (h.row + 1) + '行' + (h.col + 1) + '列に「' + h.digit + '」を入力しました（' + h.techniqueName + '）。');
+    pushHistory(snap);
+    afterEdit((h.row + 1) + '行' + (h.col + 1) + '列に「' + h.digit + '」を入力しました（' + h.techniqueName + '）。');
   }
 
   /* ------------------------------------------------------- 正解チェック */
   function toggleCheck() {
-    if (app.busy || !play.puzzleId || !play.solutionVerified) return;
+    if (app.busy || !inPlay() || !solutionUsable()) {
+      if (!solutionUsable()) setStatus('正解データがありません。新しい問題を生成するか、入力・解析モードで唯一解を確認して「この盤面をプレイ問題として採用」してください。');
+      return;
+    }
     if (play.checkActive) {
       play.checkActive = false;
       renderPlayInfo(); renderBoard(); updateControls(); save();
       setStatus('正解チェックの表示を解除しました。');
       return;
     }
-    var board = compositeBoard();
     var wrong = 0;
     for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
       var v = board[r][c];
@@ -2252,19 +1863,23 @@ var SudokuTests = (function () {
 
   /* --------------------------------------------------- 自動解答（プレイ） */
   function autoSolvePlay() {
-    if (app.busy || !play.puzzleId || !play.solutionVerified) return;
+    if (app.busy) return;
+    if (!inPlay() || !solutionUsable()) {
+      setStatus('正解データがありません。新しい問題を生成するか、入力・解析モードで唯一解を確認して「この盤面をプレイ問題として採用」してください。');
+      return;
+    }
     uiConfirm('正解を表示し、現在の入力を上書きします。実行しますか？\n（初期配置はそのまま残し、候補メモはすべて消去します。Undo で元に戻せますが、自動解答の使用記録は残ります。）')
       .then(function (ok) {
         if (!ok) { setStatus('自動解答をキャンセルしました。'); return; }
-        var snap = snapshotOf(play);
+        var snap = snapshot();
         for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
-          play.userBoard[r][c] = (play.initialBoard[r][c] === 0) ? play.solutionBoard[r][c] : 0;
+          if (!(play.initialBoard && play.initialBoard[r][c] !== 0)) board[r][c] = play.solutionBoard[r][c];
         }
-        play.notes = C.createNotes();
+        notes = C.createNotes();
         play.hint = null;
         play.autoSolved = true;                               // 盤面に変更が無くても「実行した事実」を記録
-        pushHistory(play, snap);
-        afterEdit(play, '正解を表示しました（自動解答を使用）。Undo で元の入力に戻せますが、自動解答の使用記録は取り消されません。');
+        pushHistory(snap);
+        afterEdit('正解を表示しました（自動解答を使用）。Undo で元の入力に戻せますが、自動解答の使用記録は取り消されません。');
       });
   }
 
@@ -2289,43 +1904,36 @@ var SudokuTests = (function () {
     }).then(function (res) {
       setBusy(false);
       if (token !== app.opToken) return;                      // 古い生成結果は破棄
-      if (!res || res.cancelled) return;                      // キャンセル時は現在の問題を維持
+      if (!res || res.cancelled) return;                      // キャンセル時は現在の盤面を維持
       if (!res.ok) {
         var why = res.reason === 'time' ? '制限時間内に'
           : res.reason === 'attempts' ? '試行回数の上限内に' : '';
         notify(diff.label + '（初期配置 ' + diff.minClues + '〜' + diff.maxClues + '個）の問題を' + why +
-          '生成できませんでした。範囲外の問題を提供しないため、現在の問題をそのまま維持しています。難易度を変えるか、もう一度お試しください。');
-        setStatus('問題の生成に失敗しました。現在の問題は変更していません。');
+          '生成できませんでした。範囲外の問題を提供しないため、現在の盤面をそのまま維持しています。難易度を変えるか、もう一度お試しください。');
+        setStatus('問題の生成に失敗しました。現在の盤面は変更していません。');
         return;
       }
       applyNewPuzzle(res, diff);
-      setStatus(diff.label + 'の問題を生成しました（初期配置 ' + res.clues + '個・唯一解と正解データを検証済み・試行 ' + res.attempts + ' 回）。');
+      setStatus(diff.label + 'の問題を生成しました（初期配置 ' + res.clues + '個・唯一解と正解データを検証済み・試行 ' + res.attempts + ' 回）。盤面は両モードで共有されます。');
     }, function (err) {
       setBusy(false);
       if (token !== app.opToken) return;
-      notify('問題の生成中にエラーが発生しました: ' + err.message + ' 現在の問題は変更していません。');
+      notify('問題の生成中にエラーが発生しました: ' + err.message + ' 現在の盤面は変更していません。');
     });
   }
   function applyNewPuzzle(res, diff) {
+    board = C.cloneBoard(res.puzzle);                         // 共有盤面を新しい問題で置き換える
+    notes = C.createNotes();
+    history.undo = []; history.redo = [];
+    view.selected = { r: 0, c: 0 };
+    view.inputMode = 'digit';
+    play = newPlayMeta();
     play.puzzleId = makePuzzleId();
     play.difficulty = diff.key;
     play.initialBoard = C.cloneBoard(res.puzzle);
     play.solutionBoard = C.cloneBoard(res.solution);
-    play.userBoard = C.createBoard();
-    play.notes = C.createNotes();
-    play.selected = { r: 0, c: 0 };
-    play.inputMode = 'digit';
-    play.elapsedMs = 0;
-    timer.running = false; timer.startTs = 0;
-    play.hintCount = 0;
-    play.revealedHintKeys = {};
-    play.autoSolved = false;
-    play.checkActive = false;
-    play.checkWrong = {};
-    play.completed = false;
-    play.hint = null;
     play.solutionVerified = true;
-    play.undo = []; play.redo = [];
+    analysis.result = null;                                   // 盤面が変わったので解析結果は無効
     el.difficulty.value = diff.key;
     clearCompletion();
     renderAll();
@@ -2334,39 +1942,46 @@ var SudokuTests = (function () {
   }
   function resetPlay() {
     if (app.busy) return;
-    if (!play.puzzleId) { setStatus('問題がありません。'); return; }
-    uiConfirm('同じ問題の初期状態に戻します。入力・候補メモ・Undo/Redo 履歴・ヒント使用回数・自動解答の記録・経過時間が初期化されます（初期配置と正解データは維持します）。よろしいですか？')
-      .then(function (ok) {
-        if (!ok) { setStatus('リセットをキャンセルしました。'); return; }
-        play.userBoard = C.createBoard();
-        play.notes = C.createNotes();
-        play.undo = []; play.redo = [];
-        play.hint = null;
-        play.hintCount = 0; play.revealedHintKeys = {};
-        play.autoSolved = false;
-        play.checkActive = false; play.checkWrong = {};
-        play.completed = false;
-        play.elapsedMs = 0; timer.running = false; timer.startTs = 0;
-        play.inputMode = 'digit';
-        clearCompletion();
-        renderAll();
-        updateTimerState();
-        save();
-        setStatus('同じ問題の初期状態に戻しました（このリセット自体は Undo の対象外です）。');
-      });
+    if (!puzzleAttached() && !anyValue()) { setStatus('初期状態に戻せる盤面がありません。'); return; }
+    var msg = puzzleAttached()
+      ? '同じ問題の初期状態に戻します。入力・候補メモ・Undo/Redo 履歴・ヒント使用回数・自動解答の記録・経過時間が初期化されます（初期配置と正解データは維持します）。よろしいですか？'
+      : '盤面をすべて消去します（この盤面には正解データが紐づいていないため、初期状態＝空の盤面になります）。よろしいですか？';
+    uiConfirm(msg).then(function (ok) {
+      if (!ok) { setStatus('リセットをキャンセルしました。'); return; }
+      if (puzzleAttached()) {
+        board = C.cloneBoard(play.initialBoard);
+      } else {
+        board = C.createBoard();
+      }
+      notes = C.createNotes();
+      history.undo = []; history.redo = [];
+      play.hint = null;
+      play.hintCount = 0; play.revealedHintKeys = {};
+      play.autoSolved = false;
+      play.checkActive = false;
+      play.completed = false;
+      play.elapsedMs = 0; timer.running = false; timer.startTs = 0;
+      view.inputMode = 'digit';
+      analysis.result = null;
+      clearCompletion();
+      renderAll();
+      updateTimerState();
+      save();
+      setStatus('初期状態に戻しました（このリセット自体は Undo の対象外です）。');
+    });
   }
   function clearAnalysisBoard() {
     if (app.busy) return;
-    uiConfirm('入力・解析モードの盤面、候補メモ、履歴、解析結果をすべて初期化します。よろしいですか？')
+    uiConfirm('盤面、候補メモ、履歴、解析結果をすべて初期化します。この盤面はプレイモードと共有しているため、プレイモード側も空になります。よろしいですか？')
       .then(function (ok) {
         if (!ok) { setStatus('盤面クリアをキャンセルしました。'); return; }
-        analysis.board = C.createBoard();
-        analysis.notes = C.createNotes();
-        analysis.undo = []; analysis.redo = [];
+        board = C.createBoard();
+        notes = C.createNotes();
+        history.undo = []; history.redo = [];
         analysis.result = null;
-        analysis.selected = { r: 0, c: 0 };
-        renderAll(); save();
-        setStatus('入力盤面をクリアしました（このクリア自体は Undo の対象外です）。');
+        view.selected = { r: 0, c: 0 };
+        play.hint = null;
+        afterEdit('盤面をクリアしました（このクリア自体は Undo の対象外です）。');
       });
   }
 
@@ -2378,20 +1993,18 @@ var SudokuTests = (function () {
       notify('インポートできません：' + norm.reason + ' 現在の盤面は変更していません。');
       return;
     }
-    var hasValue = false;
-    for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) if (analysis.board[r][c] !== 0) hasValue = true;
     var applyIt = function () {
-      var snap = snapshotOf(analysis);
-      analysis.board = C.cloneBoard(norm.board);
-      analysis.notes = C.createNotes();
+      var snap = snapshot();
+      board = C.cloneBoard(norm.board);
+      notes = C.createNotes();
       analysis.result = null;
-      pushHistory(analysis, snap);                             // インポートは 1 操作として Undo 可能
-      renderAll(); save();
-      var dup = norm.duplicates.length;
-      setStatus('インポートしました。' + (dup ? '重複しているマスが ' + dup + ' 個あります（そのまま編集できます）。' : '重複はありません。') + ' 候補メモと解析結果はクリアしました。');
+      pushHistory(snap);                                      // インポートは 1 操作として Undo 可能
+      afterEdit('インポートしました（盤面はプレイモードと共有しているため、プレイモードにも反映されています）。'
+        + (norm.duplicates.length ? '重複しているマスが ' + norm.duplicates.length + ' 個あります。' : '重複はありません。')
+        + ' 候補メモと解析結果はクリアしました。');
     };
-    if (hasValue) {
-      uiConfirm('現在の入力盤面を上書きしてインポートします。よろしいですか？').then(function (ok) {
+    if (anyValue()) {
+      uiConfirm('現在の盤面を上書きしてインポートします。この盤面はプレイモードと共有しているため、プレイモード側も置き換わります。よろしいですか？').then(function (ok) {
         if (!ok) { setStatus('インポートをキャンセルしました。現在の盤面はそのままです。'); return; }
         applyIt();
       });
@@ -2406,23 +2019,23 @@ var SudokuTests = (function () {
     save();
   }
   function runAnalysis() {
-    if (app.busy) { setStatus('別の処理を実行中です。完了するかキャンセルしてください。'); return; }
-    var board = analysis.board;
+    if (app.busy) { setStatus('別の処理を実行中です。完了するかキャンセルしてからお試しください。'); return; }
     if (!C.isValidBoardShape(board)) {
-      setAnalysisResult({ status: 'format_error', boardKey: C.boardKey(analysis.board), message: '盤面の形式が正しくありません（9×9 の 0〜9 の整数が必要です）。', verified: false });
+      setAnalysisResult({ status: 'format_error', boardKey: boardKey(), message: '盤面の形式が正しくありません（9×9 の 0〜9 の整数が必要です）。', verified: false });
       setStatus('解析できません：盤面の形式が不正です。');
       return;
     }
     var dups = C.findDuplicates(board);
     if (dups.length) {
-      setAnalysisResult({ status: 'duplicate', boardKey: C.boardKey(board), duplicates: dups, message: '重複しているマスが ' + dups.length + ' 個あります。解探索は行いません（重複を修正してから解析してください）。', verified: false });
+      setAnalysisResult({ status: 'duplicate', boardKey: boardKey(), duplicates: dups, message: '重複しているマスが ' + dups.length + ' 個あります。解探索は行いません（重複を修正してから解析してください）。', verified: false });
       setStatus('解析できません：重複があります。');
       return;
     }
     var token = ++app.opToken;
-    var key = C.boardKey(board);
+    var key = boardKey();
+    var target = C.cloneBoard(board);
     setBusy(true, '解を探索しています…（2 個見つかった時点で打ち切ります）');
-    heavyRun('solve', { board: C.cloneBoard(board), limit: 2, deadline: Date.now() + SOLVE_TIME_LIMIT })
+    heavyRun('solve', { board: target, limit: 2, deadline: Date.now() + SOLVE_TIME_LIMIT })
       .then(function (res) {
         setBusy(false);
         if (token !== app.opToken) return;                    // 古い結果は適用しない
@@ -2453,30 +2066,52 @@ var SudokuTests = (function () {
     if (app.busy) return;
     var r = analysis.result;
     if (!r) { setStatus('先に「解析」を実行してください。'); return; }
-    if (C.boardKey(analysis.board) !== r.boardKey) { setStatus('解析後に入力盤面が変更されています。もう一度「解析」を実行してください。'); return; }
+    if (boardKey() !== r.boardKey) { setStatus('解析後に入力盤面が変更されています。もう一度「解析」を実行してください。'); return; }
     if (r.status !== 'unique' && r.status !== 'multiple') {
       setStatus('この解析結果には解を適用できません（' + r.status + '）。解なし・入力エラー・重複・キャンセル・制限到達の場合は盤面を変更しません。');
       return;
     }
-    var solution = r.solution;
-    if (!solution) { setStatus('適用できる解データがありません。もう一度「解析」を実行してください。'); return; }
+    if (!r.solution) { setStatus('適用できる解データがありません。もう一度「解析」を実行してください。'); return; }
     var msg = r.status === 'multiple'
       ? '複数の解があります。そのうち 1 つを盤面に表示します。よろしいですか？（Undo で元に戻せます）'
       : '解を盤面に適用します。よろしいですか？（Undo で元に戻せます）';
     uiConfirm(msg).then(function (ok) {
       if (!ok) { setStatus('自動解答をキャンセルしました。盤面は変更していません。'); return; }
-      if (C.boardKey(analysis.board) !== r.boardKey) {
+      if (boardKey() !== r.boardKey) {
         setStatus('適用直前に盤面が変更されたため、適用しませんでした。もう一度「解析」を実行してください。');
         return;
       }
-      var snap = snapshotOf(analysis);
-      analysis.board = C.cloneBoard(solution);
-      analysis.notes = C.createNotes();
-      analysis.result = null;                                  // 盤面が変わったので以前の結果は無効
-      pushHistory(analysis, snap);
-      renderAll(); save();
-      setStatus((r.status === 'multiple' ? '複数の解のうち 1 つを適用しました' : '解を適用しました') + '（Undo で元の入力に戻して再編集できます）。');
+      var snap = snapshot();
+      board = C.cloneBoard(r.solution);
+      notes = C.createNotes();
+      analysis.result = null;                                 // 盤面が変わったので以前の結果は無効
+      pushHistory(snap);
+      afterEdit((r.status === 'multiple' ? '複数の解のうち 1 つを適用しました' : '解を適用しました') + '（Undo で元の入力に戻して再編集できます）。');
     });
+  }
+  /** 解析済みの唯一解盤面を、プレイモードの問題として採用する。 */
+  function adoptBoard() {
+    if (app.busy) return;
+    var r = analysis.result;
+    if (!canAdopt()) {
+      setStatus('採用できるのは、現在の盤面と一致する「唯一解」の解析結果だけです。先に「解析」を実行してください。');
+      return;
+    }
+    uiConfirm('この盤面をプレイ問題として採用します。\n（盤面はそのまま使い、解析で確認した唯一解を正解データとして紐づけます。経過時間・ヒント使用回数・自動解答記録・履歴はリセットされ、プレイモードに切り替わります。）')
+      .then(function (ok) {
+        if (!ok) { setStatus('採用をキャンセルしました。'); return; }
+        if (!canAdopt()) { setStatus('盤面が変更されたため採用できません。もう一度「解析」を実行してください。'); return; }
+        play = newPlayMeta();
+        play.puzzleId = makePuzzleId();
+        play.difficulty = 'custom';
+        play.initialBoard = C.cloneBoard(board);
+        play.solutionBoard = C.cloneBoard(r.solution);
+        play.solutionVerified = true;
+        history.undo = []; history.redo = [];
+        clearCompletion();
+        setMode('play');
+        setStatus('この盤面をプレイ問題として採用しました（唯一解を確認済み）。正解チェック・次の一手・自動解答が使えます。');
+      });
   }
 
   /* --------------------------------------------------------------- 保存 */
@@ -2495,20 +2130,16 @@ var SudokuTests = (function () {
     return {
       version: SAVE_VERSION,
       mode: app.mode,
+      board: board, notes: notes, selected: view.selected, inputMode: view.inputMode,
+      undo: history.undo, redo: history.redo,
       play: {
+        initialBoard: play.initialBoard, solutionBoard: play.solutionBoard,
         puzzleId: play.puzzleId, difficulty: play.difficulty,
-        initialBoard: play.initialBoard, userBoard: play.userBoard, solutionBoard: play.solutionBoard,
-        notes: play.notes, elapsedMs: currentElapsed(), hintCount: play.hintCount,
+        elapsedMs: currentElapsed(), hintCount: play.hintCount,
         revealedHintKeys: Object.keys(play.revealedHintKeys), autoSolved: play.autoSolved,
-        checkActive: play.checkActive, completed: play.completed,
-        selected: play.selected, inputMode: play.inputMode, undo: play.undo, redo: play.redo
+        checkActive: play.checkActive, completed: play.completed
       },
-      analysis: {
-        board: analysis.board, notes: analysis.notes, selected: analysis.selected,
-        inputMode: analysis.inputMode, undo: analysis.undo, redo: analysis.redo,
-        // 検証済み（確定した結論）の解析結果だけを保存する
-        result: (analysis.result && analysis.result.verified) ? analysis.result : null
-      }
+      analysis: { result: (analysis.result && analysis.result.verified) ? analysis.result : null }
     };
   }
   function save() {
@@ -2522,27 +2153,61 @@ var SudokuTests = (function () {
       }
     }
   }
-  /** 旧形式（version 1）からの明示的な移行。 */
-  function migrateV1(data) {
-    var p = data.play || {};
-    p.revealedHintKeys = [];                 // 旧形式には重複加算防止キーが無い
-    p.autoSolved = false;
-    data.play = p;
-    if (!data.analysis) {
-      data.analysis = { board: C.createBoard(), notes: C.createNotes(), selected: { r: 0, c: 0 }, inputMode: 'digit', undo: [], redo: [] };
+  /** 旧形式（version 2）からの明示的な移行: 2つの盤面を1つの共有盤面へ統合する。 */
+  function migrateV2(data) {
+    var p = data.play || {}, a = data.analysis || {};
+    var composed = C.createBoard();
+    var ok = validBoardShape(p.initialBoard) && validBoardShape(p.userBoard);
+    if (ok) {
+      for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
+        composed[r][c] = p.initialBoard[r][c] !== 0 ? p.initialBoard[r][c] : p.userBoard[r][c];
+      }
+    } else if (validBoardShape(a.board)) {
+      composed = C.cloneBoard(a.board);
     }
-    delete data.analysis.result;
-    data.version = 2;
-    app.migrationNotice = '保存データを旧形式（version 1）から移行しました。ヒント使用回数は維持し、重複加算防止のキー集合は空にしました（旧形式で表示済みだった一手は、再表示時に改めて加算される可能性があります）。';
+    var newNotes = C.createNotes();
+    if (validBoardShape(composed)) {
+      var src = validNotes(p.notes, composed) ? p.notes : (validNotes(a.notes, composed) ? a.notes : null);
+      if (src) newNotes = C.cloneNotes(src);
+    }
+    // 履歴（プレイ側）は「初期配置＋入力」の合成盤面へ変換する
+    var newUndo = [], newRedo = [];
+    if (ok) {
+      var conv = function (list) {
+        var out = [];
+        if (!Array.isArray(list)) return out;
+        for (var i = 0; i < list.length; i++) {
+          var e = list[i];
+          if (!e || !validBoardShape(e.user)) continue;
+          var b2 = C.createBoard();
+          for (var r2 = 0; r2 < 9; r2++) for (var c2 = 0; c2 < 9; c2++) {
+            b2[r2][c2] = p.initialBoard[r2][c2] !== 0 ? p.initialBoard[r2][c2] : e.user[r2][c2];
+          }
+          out.push({ board: b2, notes: C.cloneNotes(e.notes || C.createNotes()) });
+        }
+        return out;
+      };
+      newUndo = conv(p.undo);
+      newRedo = conv(p.redo);
+    }
+    data.version = 3;
+    data.board = composed;
+    data.notes = newNotes;
+    data.undo = newUndo;
+    data.redo = newRedo;
+    data.selected = (p.selected && typeof p.selected.r === 'number') ? p.selected : { r: 0, c: 0 };
+    data.inputMode = p.inputMode === 'note' ? 'note' : 'digit';
+    if (data.analysis) delete data.analysis.result;            // 盤面キーが変わるため解析結果は破棄
+    app.migrationNotice = '保存データを旧形式（version 2）から移行しました。プレイモードの盤面を共有盤面として引き継ぎ、入力・解析モードの盤面はこの共有盤面に統合しました。旧形式の解析結果は盤面が一致しないため破棄しています。';
     return data;
   }
   function validBoardShape(b) { return C.isValidBoardShape(b); }
-  function validNotes(notes, board, initial) {
-    if (!notes || notes.length !== 9) return false;
+  function validNotes(n, b) {
+    if (!n || n.length !== 9) return false;
     for (var r = 0; r < 9; r++) {
-      if (!notes[r] || notes[r].length !== 9) return false;
+      if (!n[r] || n[r].length !== 9) return false;
       for (var c = 0; c < 9; c++) {
-        var list = notes[r][c];
+        var list = n[r][c];
         if (!Array.isArray(list)) return false;
         var seen = {};
         for (var i = 0; i < list.length; i++) {
@@ -2550,22 +2215,16 @@ var SudokuTests = (function () {
           if (typeof d !== 'number' || d < 1 || d > 9 || Math.floor(d) !== d || seen[d]) return false;
           seen[d] = true;
         }
-        // 数字が入っているマス（初期配置・入力済み）にメモを保持しない
-        if (board[r][c] !== 0 && list.length > 0) return false;
+        if (b && b[r][c] !== 0 && list.length > 0) return false;   // 数字が入ったマスにメモを保持しない
       }
     }
     return true;
   }
-  function validHistory(list, isPlay) {
+  function validHistory(list) {
     if (!Array.isArray(list)) return false;
     for (var i = 0; i < list.length; i++) {
       var e = list[i];
-      if (!e || typeof e !== 'object') return false;
-      if (isPlay) {
-        if (!validBoardShape(e.user)) return false;
-      } else {
-        if (!validBoardShape(e.board)) return false;
-      }
+      if (!e || typeof e !== 'object' || !validBoardShape(e.board)) return false;
       if (!e.notes || e.notes.length !== 9) return false;
       for (var r = 0; r < 9; r++) {
         if (!e.notes[r] || e.notes[r].length !== 9) return false;
@@ -2600,106 +2259,80 @@ var SudokuTests = (function () {
       notify('保存データの形式が不正なため使用しませんでした。新規状態で開始します。');
       return;
     }
-    if (data.version === 1) data = migrateV1(data);
+    if (data.version === 1 || data.version === 2) data = migrateV2(data);
     if (data.version !== SAVE_VERSION) {
       notify('対応していない保存形式（version ' + data.version + '）のため、保存データを使用しませんでした。新規状態で開始します。');
       return;
     }
     var warnings = [];
-    var nextPlay = newPlayState();
-    var nextAnalysis = newAnalysisState();
-    // --- プレイ状態の復元 ---
+    if (!validBoardShape(data.board)) {
+      notify('保存された盤面の形式が不正なため使用しませんでした。新規状態で開始します。');
+      return;
+    }
+    board = C.cloneBoard(data.board);
+    notes = validNotes(data.notes, board) ? C.cloneNotes(data.notes) : C.createNotes();
+    if (!validNotes(data.notes, board)) warnings.push('候補メモの形式が不正だったため、候補メモだけを空にしました。');
+    if (data.selected && typeof data.selected.r === 'number' && typeof data.selected.c === 'number' &&
+      data.selected.r >= 0 && data.selected.r < 9 && data.selected.c >= 0 && data.selected.c < 9) {
+      view.selected = { r: data.selected.r, c: data.selected.c };
+    }
+    view.inputMode = data.inputMode === 'note' ? 'note' : 'digit';
+    if (validHistory(data.undo)) history.undo = data.undo; else { history.undo = []; warnings.push('Undo 履歴が不正だったため破棄しました。'); }
+    if (validHistory(data.redo)) history.redo = data.redo; else { history.redo = []; warnings.push('Redo 履歴が不正だったため破棄しました。'); }
+    if (history.undo.length > HISTORY_LIMIT) history.undo = history.undo.slice(-HISTORY_LIMIT);
+    if (history.redo.length > HISTORY_LIMIT) history.redo = history.redo.slice(-HISTORY_LIMIT);
+    app.mode = data.mode === 'analysis' ? 'analysis' : 'play';
+
+    var meta = newPlayMeta();
     var p = data.play || {};
-    if (p.puzzleId && validBoardShape(p.initialBoard) && validBoardShape(p.userBoard) &&
-      validBoardShape(p.solutionBoard)) {
-      var okUser = true;
+    if (p.puzzleId && validBoardShape(p.initialBoard) && validBoardShape(p.solutionBoard)) {
+      var clueOk = true;
       for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
-        if (p.initialBoard[r][c] !== 0 && p.userBoard[r][c] !== 0) okUser = false;
+        if (p.initialBoard[r][c] !== 0 && p.initialBoard[r][c] !== p.solutionBoard[r][c]) clueOk = false;
       }
-      if (!okUser) {
-        warnings.push('初期配置マスの入力値が不正だったため、プレイ状態を破棄しました。');
-      } else if (!C.isCompleteValid(p.solutionBoard)) {
-        warnings.push('正解盤面が有効な完成盤面ではないため、プレイ状態を破棄しました。');
+      if (!C.isCompleteValid(p.solutionBoard)) {
+        warnings.push('正解盤面が有効な完成盤面ではないため、問題との対応付けを破棄しました。');
+      } else if (!clueOk) {
+        warnings.push('初期配置と正解盤面が食い違っているため、問題との対応付けを破棄しました。');
       } else {
-        var clueOk = true;
-        for (var r2 = 0; r2 < 9; r2++) for (var c2 = 0; c2 < 9; c2++) {
-          if (p.initialBoard[r2][c2] !== 0 && p.initialBoard[r2][c2] !== p.solutionBoard[r2][c2]) clueOk = false;
-        }
-        if (!clueOk) {
-          warnings.push('初期配置と正解盤面が食い違っているため、プレイ状態を破棄しました。');
-        } else {
-          nextPlay.puzzleId = String(p.puzzleId);
-          nextPlay.difficulty = DIFFICULTIES[p.difficulty] ? p.difficulty : 'easy';
-          nextPlay.initialBoard = C.cloneBoard(p.initialBoard);
-          nextPlay.userBoard = C.cloneBoard(p.userBoard);
-          nextPlay.solutionBoard = C.cloneBoard(p.solutionBoard);
-          nextPlay.notes = validNotes(p.notes, p.userBoard, p.initialBoard) ? C.cloneNotes(p.notes) : C.createNotes();
-          if (nextPlay.notes !== p.notes && !validNotes(p.notes, p.userBoard, p.initialBoard)) {
-            warnings.push('候補メモの形式が不正だったため、候補メモだけを空にしました。');
-          }
-          nextPlay.elapsedMs = (typeof p.elapsedMs === 'number' && isFinite(p.elapsedMs) && p.elapsedMs >= 0) ? p.elapsedMs : 0;
-          nextPlay.hintCount = (typeof p.hintCount === 'number' && isFinite(p.hintCount) && p.hintCount >= 0) ? Math.floor(p.hintCount) : 0;
-          nextPlay.autoSolved = !!p.autoSolved;
-          nextPlay.checkActive = !!p.checkActive;
-          nextPlay.completed = !!p.completed;
-          nextPlay.inputMode = (p.inputMode === 'note') ? 'note' : 'digit';
-          if (p.selected && typeof p.selected.r === 'number' && typeof p.selected.c === 'number' &&
-            p.selected.r >= 0 && p.selected.r < 9 && p.selected.c >= 0 && p.selected.c < 9) {
-            nextPlay.selected = { r: p.selected.r, c: p.selected.c };
-          }
-          var keys = p.revealedHintKeys;
-          if (Array.isArray(keys)) {
-            for (var ki = 0; ki < keys.length; ki++) {
-              if (typeof keys[ki] === 'string') nextPlay.revealedHintKeys[keys[ki]] = true;
-            }
-          } else {
-            warnings.push('ヒントの識別キー集合が不正だったため、空にしました（使用回数は維持しています）。');
-          }
-          if (validHistory(p.undo, true)) nextPlay.undo = p.undo; else warnings.push('Undo 履歴が不正だったため破棄しました。');
-          if (validHistory(p.redo, true)) nextPlay.redo = p.redo; else warnings.push('Redo 履歴が不正だったため破棄しました。');
-          if (nextPlay.undo.length > HISTORY_LIMIT) nextPlay.undo = nextPlay.undo.slice(-HISTORY_LIMIT);
-          if (nextPlay.redo.length > HISTORY_LIMIT) nextPlay.redo = nextPlay.redo.slice(-HISTORY_LIMIT);
-          nextPlay.solutionVerified = false;                   // 検証は非同期で行う（検証中は正解依存機能を無効化）
-        }
+        meta.puzzleId = String(p.puzzleId);
+        meta.difficulty = DIFFICULTIES[p.difficulty] ? p.difficulty : 'easy';
+        meta.initialBoard = C.cloneBoard(p.initialBoard);
+        meta.solutionBoard = C.cloneBoard(p.solutionBoard);
+        meta.solutionVerified = false;                        // 検証は非同期で行う
       }
     } else if (p.puzzleId) {
-      warnings.push('盤面データの形式が不正だったため、プレイ状態を破棄しました。');
+      warnings.push('盤面データの形式が不正だったため、問題との対応付けを破棄しました。');
     }
-    // --- 入力・解析状態の復元 ---
+    meta.elapsedMs = (typeof p.elapsedMs === 'number' && isFinite(p.elapsedMs) && p.elapsedMs >= 0) ? p.elapsedMs : 0;
+    meta.hintCount = (typeof p.hintCount === 'number' && isFinite(p.hintCount) && p.hintCount >= 0) ? Math.floor(p.hintCount) : 0;
+    meta.autoSolved = !!p.autoSolved;
+    meta.checkActive = !!p.checkActive;
+    meta.completed = !!p.completed;
+    if (Array.isArray(p.revealedHintKeys)) {
+      for (var ki = 0; ki < p.revealedHintKeys.length; ki++) {
+        if (typeof p.revealedHintKeys[ki] === 'string') meta.revealedHintKeys[p.revealedHintKeys[ki]] = true;
+      }
+    } else if (p.revealedHintKeys !== undefined) {
+      warnings.push('ヒントの識別キー集合が不正だったため、空にしました（使用回数は維持しています）。');
+    }
+    play = meta;
+    if (puzzleAttached() && !associationValid()) {
+      detachPuzzle(null);
+      warnings.push('保存された盤面が初期配置と一致しないため、問題との対応付けを解除しました（正解チェック・自動解答は使えません）。');
+    }
     var a = data.analysis || {};
-    if (validBoardShape(a.board)) {
-      nextAnalysis.board = C.cloneBoard(a.board);
-      nextAnalysis.notes = validNotes(a.notes, a.board, null) ? C.cloneNotes(a.notes) : C.createNotes();
-      if (!validNotes(a.notes, a.board, null)) warnings.push('入力・解析モードの候補メモが不正だったため空にしました。');
-      nextAnalysis.inputMode = (a.inputMode === 'note') ? 'note' : 'digit';
-      if (a.selected && typeof a.selected.r === 'number' && typeof a.selected.c === 'number' &&
-        a.selected.r >= 0 && a.selected.r < 9 && a.selected.c >= 0 && a.selected.c < 9) {
-        nextAnalysis.selected = { r: a.selected.r, c: a.selected.c };
-      }
-      if (validHistory(a.undo, false)) nextAnalysis.undo = a.undo; else warnings.push('入力・解析モードの Undo 履歴が不正だったため破棄しました。');
-      if (validHistory(a.redo, false)) nextAnalysis.redo = a.redo; else warnings.push('入力・解析モードの Redo 履歴が不正だったため破棄しました。');
-      if (nextAnalysis.undo.length > HISTORY_LIMIT) nextAnalysis.undo = nextAnalysis.undo.slice(-HISTORY_LIMIT);
-      if (nextAnalysis.redo.length > HISTORY_LIMIT) nextAnalysis.redo = nextAnalysis.redo.slice(-HISTORY_LIMIT);
-      // 検証済みの解析結果のみ復元し、対象盤面と一致することを確認する
-      if (a.result && a.result.verified && typeof a.result.boardKey === 'string' &&
-        a.result.boardKey === C.boardKey(nextAnalysis.board)) {
-        nextAnalysis.result = a.result;
-      } else if (a.result) {
-        warnings.push('解析結果は保存対象外（未検証または盤面不一致）のため復元しませんでした。');
-      }
-    } else if (a.board) {
-      warnings.push('入力・解析モードの盤面形式が不正だったため、空の盤面に戻しました。');
+    if (a.result && a.result.verified && typeof a.result.boardKey === 'string' && a.result.boardKey === boardKey()) {
+      analysis.result = a.result;
+    } else if (a.result) {
+      warnings.push('解析結果は保存対象外（未検証または盤面不一致）のため復元しませんでした。');
     }
-    play = nextPlay;
-    analysis = nextAnalysis;
-    app.mode = (data.mode === 'analysis') ? 'analysis' : 'play';
-    el.difficulty.value = play.difficulty;
     if (app.migrationNotice) notify(app.migrationNotice);
     if (warnings.length) notify('保存データの一部を復元できませんでした：\n・' + warnings.join('\n・'));
   }
   /** 復元した問題の「唯一解」と「正解データの一致」を再検証する。 */
   function verifySavedPuzzle() {
-    if (!play.puzzleId) return;
+    if (!puzzleAttached()) return;
     var token = ++app.verifyToken;
     play.solutionVerified = false;
     updateControls();
@@ -2708,9 +2341,8 @@ var SudokuTests = (function () {
       .then(function (res) {
         if (token !== app.verifyToken) return;
         if (!res || res.cancelled) {
-          play.solutionVerified = false;
+          setStatus('保存データの検証が完了しませんでした。もう一度ページを再読み込みしてください。');
           updateControls();
-          setStatus('保存データの検証が完了しませんでした。もう一度ページを再読み込みするか、新しい問題を生成してください。');
           return;
         }
         var kind = C.classifySolveResult(res);
@@ -2719,18 +2351,14 @@ var SudokuTests = (function () {
           updateControls();
           setStatus('保存された問題を復元し、唯一解であることと正解データの一致を検証しました。');
         } else {
-          play.solutionVerified = false;
-          play = newPlayState();
-          el.difficulty.value = play.difficulty;
-          clearCompletion();
-          renderAll(); updateTimerState(); save();
-          notify('保存された問題データの検証に失敗しました（唯一解ではない、または保存された正解と一致しません）。プレイ状態を安全な初期状態に戻しました。');
+          detachPuzzle('保存された問題データの検証に失敗しました（唯一解ではない、または保存された正解と一致しません）。問題との対応付けを解除しました（盤面の入力は残しています）。');
+          updateControls();
+          save();
         }
       }, function () {
         if (token !== app.verifyToken) return;
-        play.solutionVerified = false;
+        notify('保存データの検証中にエラーが発生しました。');
         updateControls();
-        notify('保存データの検証中にエラーが発生しました。新しい問題を生成してください。');
       });
   }
 
@@ -2762,6 +2390,7 @@ var SudokuTests = (function () {
   }
 
   /* -------------------------------------------------------------- モード */
+  /** モードを切り替える。盤面・候補・履歴・選択・入力モードは共有のまま変更しない。 */
   function setMode(mode) {
     if (mode === app.mode) return;
     if (app.busy) cancelHeavy();                              // 進行中の重い処理をキャンセル
@@ -2772,8 +2401,8 @@ var SudokuTests = (function () {
     updateTimerState();
     save();
     setStatus(mode === 'play'
-      ? 'プレイモードに切り替えました（タイマーはプレイモードのときだけ動きます）。'
-      : '入力・解析モードに切り替えました。プレイ中のタイマーは停止し、プレイの入力はそのまま保持されます。');
+      ? 'プレイモードに切り替えました（盤面は共有のため切り替わっていません。タイマーはプレイモードのときだけ動きます）。'
+      : '入力・解析モードに切り替えました。盤面・候補メモ・履歴は共有で、ここでの入力はそのままプレイモードに反映されます。');
   }
 
   /* ------------------------------------------------------------ イベント */
@@ -2783,14 +2412,13 @@ var SudokuTests = (function () {
     return tag === 'input' || tag === 'textarea' || tag === 'select' || t.isContentEditable === true;
   }
   function bindEvents() {
-    // モード切り替え（タブ）
     el['tab-play'].addEventListener('click', function () { setMode('play'); });
     el['tab-analysis'].addEventListener('click', function () { setMode('analysis'); });
     [el['tab-play'], el['tab-analysis']].forEach(function (tab) {
       tab.addEventListener('keydown', function (ev) {
         if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') {
           ev.preventDefault();
-          var next = app.mode === 'play' ? 'analysis' : 'play';
+          var next = inPlay() ? 'analysis' : 'play';
           setMode(next);
           $(next === 'play' ? 'tab-play' : 'tab-analysis').focus();
         }
@@ -2806,7 +2434,7 @@ var SudokuTests = (function () {
     // 盤面: キーボード（盤面にフォーカスがある場合だけ処理する）
     el.board.addEventListener('keydown', function (ev) {
       if (isTextInput(ev.target)) return;
-      var st = current(), r = st.selected.r, c = st.selected.c;
+      var r = view.selected.r, c = view.selected.c;
       var key = ev.key;
       if (key === 'ArrowUp') { ev.preventDefault(); moveSelection(-1, 0); return; }
       if (key === 'ArrowDown') { ev.preventDefault(); moveSelection(1, 0); return; }
@@ -2834,7 +2462,6 @@ var SudokuTests = (function () {
       }
     });
 
-    // 数字パッド
     el.pad.addEventListener('click', function (ev) {
       var t = ev.target;
       if (!t || !t.getAttribute) return;
@@ -2865,6 +2492,7 @@ var SudokuTests = (function () {
     el['btn-import'].addEventListener('click', importBoard);
     el['btn-analyze'].addEventListener('click', runAnalysis);
     el['btn-analysis-solve'].addEventListener('click', analysisAutoSolve);
+    el['btn-adopt'].addEventListener('click', adoptBoard);
     el['btn-clear-board'].addEventListener('click', clearAnalysisBoard);
 
     // 処理中パネル
@@ -2873,55 +2501,15 @@ var SudokuTests = (function () {
       setStatus(had ? '処理をキャンセルしました。' : 'キャンセルできる処理はありません。');
     });
 
-    // テスト
-    el['btn-run-tests'].addEventListener('click', runTestsUI);
-
     // 可視状態・終了時の保存
     document.addEventListener('visibilitychange', function () {
       updateTimerState();                                     // 非表示中はタイマーを止める（閉じていた時間は加算しない）
       if (document.hidden) save();
     });
     window.addEventListener('pagehide', function () {
-      if (timer.running) { play.elapsedMs = currentElapsed(); }
+      if (timer.running) play.elapsedMs = currentElapsed();
       save();
     });
-  }
-
-  /* ------------------------------------------------------------ テスト実行 */
-  function runTestsUI() {
-    if (app.busy) return;
-    var names = SudokuTests.list();
-    var list = el['test-results'];
-    list.innerHTML = '';
-    el['btn-run-tests'].disabled = true;
-    var passed = 0, failed = 0, i = 0;
-    el['test-summary'].textContent = 'テストを実行しています…（0 / ' + names.length + '）';
-    function step() {
-      if (i >= names.length) {
-        el['test-summary'].textContent = 'テスト完了：' + passed + ' 件成功 / ' + failed + ' 件失敗（合計 ' + names.length + ' 件）';
-        el['btn-run-tests'].disabled = false;
-        return;
-      }
-      var res = SudokuTests.runOne(i);
-      var li = document.createElement('li');
-      li.className = res.pass ? 'ok' : 'ng';
-      var title = document.createElement('b');
-      title.textContent = (res.pass ? '成功' : '失敗') + '（' + res.ms + 'ms）';
-      li.appendChild(title);
-      li.appendChild(document.createTextNode(' ' + res.name + (res.slow ? '［重い処理］' : '')));
-      if (!res.pass) {
-        var span = document.createElement('span');
-        span.className = 'detail';
-        span.textContent = res.detail;
-        li.appendChild(span);
-      }
-      list.appendChild(li);
-      if (res.pass) passed++; else failed++;
-      i++;
-      el['test-summary'].textContent = 'テストを実行しています…（' + i + ' / ' + names.length + '）';
-      setTimeout(step, 0);                                    // 1 件ずつ実行して画面を譲る
-    }
-    setTimeout(step, 0);
   }
 
   /* -------------------------------------------------------------- 初期化 */
@@ -2936,11 +2524,10 @@ var SudokuTests = (function () {
     renderAll();
     updateTimerState();
     startTicker();
-    if (play.puzzleId) {
-      if (play.completed) onCompleted();
-      verifySavedPuzzle();
-    } else {
-      setStatus('問題がありません。難易度を選んで「新しい問題」を押すと、唯一解の問題を生成します。');
+    if (play.puzzleId && play.completed) onCompleted();
+    if (puzzleAttached()) verifySavedPuzzle();
+    if (!play.puzzleId) {
+      setStatus('盤面は空です。難易度を選んで「新しい問題」を押すか、入力・解析モードで81文字の問題データをインポートしてください。');
     }
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
