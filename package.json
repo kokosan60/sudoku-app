@@ -1,0 +1,14 @@
+{
+  "name": "sudoku-app",
+  "version": "1.0.0",
+  "description": "唯一解を検証して自動生成する数独（ナンプレ）アプリ。候補メモ・次の一手・解析対応の単一HTMLアプリ。",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "test": "node tools/run-tests.js",
+    "test:ui": "node tools/smoke.js"
+  },
+  "devDependencies": {
+    "jsdom": "^26.0.0"
+  }
+}

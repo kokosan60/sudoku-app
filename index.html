@@ -1,0 +1,2951 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>数独（ナンプレ）｜唯一解の生成・候補メモ・次の一手・解析</title>
+<style>
+/* =============================================================================
+   デザイン方針：「計測器（原稿用紙＋製図）」— 9×9 の升目を主役に、
+   数字は等幅フォントで計器の目盛りのように表示する。角丸はほぼ使わず、
+   太い罫線（ブロック境界）と細い罫線（マス境界）で構造を語る。
+   色だけに依存しないため、重複＝斜線ハッチ＋角の三角、誤入力＝破線枠、
+   ヒント対象＝二重枠 という形の手がかりも併用する。
+   ========================================================================== */
+:root{
+  --paper:#EDF0EA;
+  --surface:#F8FAF6;
+  --surface-2:#E4E9E1;
+  --ink:#12181F;
+  --ink-soft:#4C5760;
+  --rule:#B6C0B5;
+  --rule-strong:#12181F;
+  --accent:#0F6E64;
+  --accent-soft:#D2E6E1;
+  --alert:#A63A22;
+  --alert-soft:#F2DAD2;
+  --alert-hatch:rgba(166,58,34,.20);
+  --hint:#7A4E12;
+  --hint-soft:#F1E3C6;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono","Courier New",monospace;
+  --sans:"Hiragino Kaku Gothic ProN","Hiragino Sans","Yu Gothic","Meiryo",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --radius:2px;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --paper:#0F1317;
+    --surface:#171D23;
+    --surface-2:#212A32;
+    --ink:#E9EEF2;
+    --ink-soft:#A2B1BC;
+    --rule:#39434C;
+    --rule-strong:#CBD6DE;
+    --accent:#54B7A8;
+    --accent-soft:#1C3936;
+    --alert:#E68A70;
+    --alert-soft:#3A221C;
+    --alert-hatch:rgba(230,138,112,.22);
+    --hint:#E2B467;
+    --hint-soft:#3A2E17;
+  }
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+  font-size:15px;line-height:1.6;
+}
+h1,h2,h3{margin:0;line-height:1.3}
+h1{font-size:1.35rem;letter-spacing:.02em}
+h2{font-size:1.02rem;letter-spacing:.02em;margin-bottom:.5rem}
+h3{font-size:.94rem}
+p{margin:.35rem 0}
+.skip{position:absolute;left:-9999px;top:0;background:var(--surface);padding:.5rem .75rem;z-index:9}
+.skip:focus{left:.5rem;top:.5rem}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+button,select,textarea{font:inherit;color:inherit}
+button{
+  background:var(--surface);border:1px solid var(--rule-strong);border-radius:var(--radius);
+  padding:.5rem .7rem;min-height:44px;cursor:pointer;letter-spacing:.01em;
+}
+button:hover:not(:disabled){background:var(--surface-2)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.primary{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+button.primary:hover:not(:disabled){background:var(--accent);border-color:var(--accent)}
+select,textarea{
+  background:var(--surface);border:1px solid var(--rule-strong);border-radius:var(--radius);
+  padding:.45rem .5rem;width:100%;
+}
+textarea{font-family:var(--mono);font-size:.92rem;letter-spacing:.08em}
+
+.visually-hidden{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+/* ---- ヘッダー ---- */
+.app-header{
+  display:flex;flex-wrap:wrap;gap:.75rem 1.5rem;align-items:center;justify-content:space-between;
+  padding:.9rem clamp(.75rem,3vw,1.5rem);border-bottom:2px solid var(--rule-strong);background:var(--surface);
+}
+.brand{display:flex;gap:.7rem;align-items:center;min-width:0}
+.brand-mark{
+  flex:0 0 auto;width:2.5rem;height:2.5rem;display:grid;place-items:center;
+  border:2px solid var(--rule-strong);font-family:var(--mono);font-size:1.3rem;
+  box-shadow:inset 0 0 0 3px var(--surface),inset 0 0 0 4px var(--rule-strong);
+}
+.lead{margin:.15rem 0 0;color:var(--ink-soft);font-size:.86rem;max-width:52ch}
+.modes{display:flex;gap:.4rem;flex-wrap:wrap}
+.modes button[aria-selected="true"]{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+
+/* ---- 通知・状態 ---- */
+.announce{padding:.5rem clamp(.75rem,3vw,1.5rem) 0;display:grid;gap:.35rem}
+.status{margin:0;font-size:.9rem;color:var(--ink-soft);min-height:1.4em}
+.notice{
+  margin:0;font-size:.9rem;background:var(--alert-soft);border-left:4px solid var(--alert);
+  padding:.5rem .6rem;color:var(--ink);
+}
+.notice[hidden]{display:none}
+
+/* ---- レイアウト ---- */
+main{padding:clamp(.75rem,3vw,1.5rem);display:grid;gap:1rem}
+.layout{display:grid;gap:1rem}
+@media (min-width:960px){
+  .layout{grid-template-columns:minmax(300px,440px) minmax(320px,1fr);align-items:start}
+  .col-side{display:grid;gap:1rem}
+}
+.panel{
+  background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);
+  padding:clamp(.7rem,2.4vw,1rem);
+}
+.panel-note{color:var(--ink-soft);font-size:.82rem}
+.panel-note.small{font-size:.76rem}
+.field{display:grid;gap:.25rem;margin:.5rem 0}
+.field label{font-size:.85rem;font-weight:600}
+.btn-row{display:flex;flex-wrap:wrap;gap:.45rem;margin-top:.5rem}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:.5rem;margin:.6rem 0 0}
+.stats>div{border-top:1px solid var(--rule);padding-top:.3rem}
+.stats dt{font-size:.74rem;color:var(--ink-soft);letter-spacing:.04em}
+.stats dd{margin:0;font-family:var(--mono);font-size:1rem}
+#stat-timer{font-variant-numeric:tabular-nums}
+
+/* ---- 盤面 ---- */
+.board-panel{padding:clamp(.5rem,2vw,.9rem)}
+#board{
+  --value-font:1.5rem;--note-font:.62rem;
+  display:flex;flex-direction:column;aspect-ratio:1/1;width:100%;max-width:560px;margin:0 auto;
+  border:2px solid var(--rule-strong);background:var(--surface);
+}
+.board-row{display:flex;flex:1 1 0;min-height:0}
+.cell{
+  flex:1 1 0;min-width:0;position:relative;display:flex;align-items:center;justify-content:center;
+  border-right:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  background:var(--surface);cursor:pointer;
+}
+.cell[data-c="8"]{border-right:0}
+.board-row[data-r="8"] .cell{border-bottom:0}
+.cell[data-c="2"],.cell[data-c="5"]{border-right:2px solid var(--rule-strong)}
+.board-row[data-r="2"] .cell,.board-row[data-r="5"] .cell{border-bottom:2px solid var(--rule-strong)}
+.cell .value{
+  font-family:var(--mono);font-size:var(--value-font);line-height:1;
+  font-weight:600;color:var(--accent);
+}
+.cell.initial .value{font-weight:700;color:var(--ink)}
+/* 入力値は下線付き（色以外の手がかり） */
+.cell.user .value{text-decoration:underline dotted;text-decoration-thickness:1px;text-underline-offset:.12em}
+.cell .notes{
+  position:absolute;inset:4%;display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);
+}
+.cell .notes span{
+  display:grid;place-items:center;font-family:var(--mono);font-size:var(--note-font);
+  color:var(--ink-soft);line-height:1;
+}
+.cell.related{background:var(--surface-2)}
+.cell.selected{background:var(--accent-soft);box-shadow:inset 0 0 0 2px var(--accent)}
+.cell.same-digit .value{background:var(--accent-soft);border-radius:50%;padding:0 .1em}
+/* 重複：斜線ハッチ＋右上の三角マーカー（色以外の手がかり） */
+.cell.dup{
+  background-image:repeating-linear-gradient(45deg,var(--alert-hatch) 0 3px,transparent 3px 7px);
+}
+.cell.dup::after{
+  content:"";position:absolute;top:0;right:0;width:0;height:0;
+  border-top:.5rem solid var(--alert);border-left:.5rem solid transparent;
+}
+.cell.dup .value,.cell.dup .notes span{color:var(--alert)}
+/* 正解不一致：破線の内枠 */
+.cell.wrong{outline:2px dashed var(--alert);outline-offset:-3px}
+.cell.wrong .value{color:var(--alert)}
+/* ヒント対象：二重枠、根拠ユニット：内側の細枠 */
+.cell.hint-target{background:var(--hint-soft);outline:3px double var(--hint);outline-offset:-4px}
+.cell.hint-target .value{color:var(--hint);font-weight:700}
+.cell.hint-unit{box-shadow:inset 0 0 0 2px var(--hint)}
+.board-caption{font-size:.76rem;color:var(--ink-soft);margin-top:.5rem}
+@media (prefers-reduced-motion: no-preference){
+  .cell.hint-target{animation:hintpulse 1.6s ease-in-out infinite}
+  @keyframes hintpulse{0%,100%{background:var(--hint-soft)}50%{background:var(--surface)}}
+}
+@media (prefers-reduced-motion: reduce){.cell.hint-target{animation:none}}
+
+/* ---- 入力パッド ---- */
+.pad{display:grid;grid-template-columns:repeat(5,1fr);gap:.4rem}
+.pad button{font-family:var(--mono);font-size:1.05rem;padding:.4rem 0}
+.pad button[data-digit]{background:var(--surface)}
+.pad-actions{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.5rem}
+.pad-actions button{flex:1 1 8rem}
+.mode-indicator{
+  margin:.55rem 0 0;font-size:.82rem;font-weight:600;border-left:4px solid var(--accent);padding-left:.5rem;
+}
+.mode-indicator[data-mode="note"]{border-left-color:var(--hint)}
+#btn-note[aria-pressed="true"]{background:var(--hint-soft);border-color:var(--hint);color:var(--ink);font-weight:700}
+
+/* ---- ヒント ---- */
+.hint-text{
+  white-space:pre-line;font-size:.9rem;background:var(--surface-2);border-left:4px solid var(--hint);
+  padding:.55rem .65rem;min-height:3.2em;margin:.35rem 0 0;
+}
+.hint-panel h2{border-bottom:1px solid var(--rule);padding-bottom:.3rem}
+/* ---- 解析結果 ---- */
+.analysis-result{
+  white-space:pre-line;font-size:.9rem;background:var(--surface-2);border-left:4px solid var(--rule-strong);
+  padding:.55rem .65rem;margin-top:.6rem;min-height:3.2em;
+}
+/* ---- 処理中・完成 ---- */
+.busy{border-left:4px solid var(--accent)}
+.busy h2{color:var(--accent)}
+.completion{border-left:4px solid var(--accent);background:var(--accent-soft)}
+.completion p{white-space:pre-line;font-weight:600}
+
+/* ---- テスト ---- */
+.tests{margin-top:1rem}
+.test-results{list-style:none;margin:.5rem 0 0;padding:0;display:grid;gap:.3rem}
+.test-results li{
+  font-size:.85rem;border-left:4px solid var(--rule);padding:.3rem .5rem;background:var(--surface-2);
+}
+.test-results li.ok{border-left-color:var(--accent)}
+.test-results li.ng{border-left-color:var(--alert)}
+.test-results li b{font-family:var(--mono);font-weight:600}
+.test-results li span.detail{display:block;color:var(--ink-soft);font-size:.8rem;white-space:pre-line}
+
+/* ---- ダイアログ ---- */
+dialog{
+  border:2px solid var(--rule-strong);border-radius:var(--radius);background:var(--surface);color:var(--ink);
+  padding:1rem;max-width:32rem;width:calc(100% - 2rem);
+}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+dialog p{white-space:pre-line}
+@media (max-width:600px){
+  .pad{grid-template-columns:repeat(5,1fr)}
+  .lead{font-size:.82rem}
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#board">盤面へスキップ</a>
+
+<header class="app-header">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">九</span>
+    <div>
+      <h1>数独（ナンプレ）</h1>
+      <p class="lead">唯一解を検証して自動生成する数独アプリです。候補メモ・次の一手・解析まで、すべてブラウザ内だけで動作します（外部通信なし）。</p>
+    </div>
+  </div>
+  <div class="modes" role="tablist" aria-label="モード切り替え">
+    <button type="button" id="tab-play" role="tab" aria-selected="true" aria-controls="panel-play" tabindex="0">プレイモード</button>
+    <button type="button" id="tab-analysis" role="tab" aria-selected="false" aria-controls="panel-analysis" tabindex="-1">入力・解析モード</button>
+  </div>
+</header>
+
+<div class="announce">
+  <p id="notice" class="notice" role="alert" hidden></p>
+  <p id="status" class="status" role="status" aria-live="polite"></p>
+</div>
+
+<main id="main">
+  <div class="layout">
+    <div class="col-board">
+      <section class="panel board-panel" aria-labelledby="board-heading">
+        <h2 id="board-heading" class="visually-hidden">数独盤面</h2>
+        <div id="board" role="grid" aria-label="数独盤面 9行9列" aria-rowcount="9" aria-colcount="9"></div>
+        <p class="board-caption">マスをクリック／タップして選択します。キーボードでは矢印キーで移動、1〜9で数字入力、Mで候補メモ、0・Backspace・Deleteで消去、Ctrl（⌘）+Z で Undo です。</p>
+      </section>
+
+      <section class="panel hint-panel" aria-labelledby="hint-title">
+        <h2 id="hint-title">次の一手</h2>
+        <p id="hint-text" class="hint-text" role="status" aria-live="polite">「次の一手」を押すと、いまの盤面から論理的に確定できる一手と、その理由を表示します。</p>
+        <div class="btn-row">
+          <button type="button" id="btn-apply-hint" class="primary" disabled>この一手を入力</button>
+          <button type="button" id="btn-close-hint" disabled>閉じる</button>
+        </div>
+      </section>
+
+      <section class="panel pad-panel" aria-labelledby="pad-title">
+        <h2 id="pad-title">数字と候補メモの入力</h2>
+        <div class="pad" id="pad" role="group" aria-label="数字ボタン"></div>
+        <div class="pad-actions">
+          <button type="button" id="btn-erase">消去</button>
+          <button type="button" id="btn-note" aria-pressed="false">候補メモ</button>
+          <button type="button" id="btn-clear-notes">選択マスの候補を消去</button>
+          <button type="button" id="btn-undo">Undo</button>
+          <button type="button" id="btn-redo">Redo</button>
+        </div>
+        <p class="mode-indicator" id="input-mode-indicator" data-mode="digit">入力モード：数字</p>
+      </section>
+    </div>
+
+    <div class="col-side">
+      <section id="panel-play" class="panel" role="tabpanel" aria-labelledby="tab-play">
+        <h2>プレイモード</h2>
+        <p class="panel-note">アプリが生成した唯一解の問題を解きます。初期配置の数字は変更できません。</p>
+        <div class="field">
+          <label for="difficulty">難易度（初期配置数の目安）</label>
+          <select id="difficulty">
+            <option value="easy">やさしい（40〜46個）</option>
+            <option value="normal">ふつう（32〜39個）</option>
+            <option value="hard">むずかしい（26〜31個）</option>
+          </select>
+        </div>
+        <div class="btn-row">
+          <button type="button" id="btn-new" class="primary">新しい問題</button>
+          <button type="button" id="btn-reset" disabled>リセット</button>
+        </div>
+        <dl class="stats">
+          <div><dt>問題ID</dt><dd id="stat-id">—</dd></div>
+          <div><dt>難易度</dt><dd id="stat-difficulty">—</dd></div>
+          <div><dt>経過時間</dt><dd id="stat-timer" aria-live="off">00:00</dd></div>
+          <div><dt>ヒント使用回数</dt><dd id="stat-hints">0 回</dd></div>
+        </dl>
+        <div class="btn-row">
+          <button type="button" id="btn-check" aria-pressed="false" disabled>正解チェック</button>
+          <button type="button" id="btn-hint" disabled>次の一手</button>
+          <button type="button" id="btn-solve" disabled>自動解答</button>
+        </div>
+        <p class="panel-note small">難易度は初期配置数の目安であり、厳密な論理難易度を保証するものではありません。「次の一手」は裸のシングルと行・列・ブロックの隠れたシングルに対応するため、これらだけでは解き切れない問題もあります。</p>
+      </section>
+
+      <section id="panel-analysis" class="panel" role="tabpanel" aria-labelledby="tab-analysis" hidden>
+        <h2>入力・解析モード</h2>
+        <p class="panel-note">81マスすべてを自由に編集できます。解の有無と唯一解かどうかを解析し、解を適用できます。</p>
+        <div class="field">
+          <label for="import-text">81文字の問題データ（1〜9＝数字、0 または . ＝空欄）</label>
+          <textarea id="import-text" rows="3" spellcheck="false" autocomplete="off"
+            placeholder="例：852001090090402106004509200901208043605300900300904500230000800006003000400800370"></textarea>
+        </div>
+        <div class="btn-row">
+          <button type="button" id="btn-import">インポート</button>
+          <button type="button" id="btn-analyze" class="primary">解析</button>
+          <button type="button" id="btn-analysis-solve" disabled>自動解答</button>
+          <button type="button" id="btn-clear-board">盤面クリア</button>
+        </div>
+        <p class="analysis-result" id="analysis-result">解析結果はまだありません。「解析」を押すと、解の有無と唯一解かどうかを調べます。</p>
+      </section>
+
+      <section class="panel busy" id="busy-panel" hidden aria-labelledby="busy-title">
+        <h2 id="busy-title">処理中</h2>
+        <p id="busy-text" role="status" aria-live="polite">処理しています…</p>
+        <div class="btn-row"><button type="button" id="btn-cancel">キャンセル</button></div>
+      </section>
+
+      <section class="panel completion" id="completion-panel" hidden aria-labelledby="completion-title">
+        <h2 id="completion-title">完成しました</h2>
+        <p id="completion-text"></p>
+      </section>
+    </div>
+  </div>
+
+  <section class="panel tests" aria-labelledby="tests-title">
+    <h2 id="tests-title">自動テスト（計算ロジック）</h2>
+    <p class="panel-note">重複検出・解数判定・生成・論理ヒント・インポートの自動テストです。固定盤面と期待値を使い、通常のプレイデータは変更しません。実行は1件ずつ画面を譲りながら進みます。</p>
+    <div class="btn-row"><button type="button" id="btn-run-tests">テストを実行</button></div>
+    <p id="test-summary" role="status" aria-live="polite"></p>
+    <ol class="test-results" id="test-results"></ol>
+  </section>
+</main>
+
+<dialog id="confirm-dialog" aria-labelledby="confirm-title">
+  <form method="dialog">
+    <h2 id="confirm-title">確認</h2>
+    <p id="confirm-text"></p>
+    <div class="btn-row">
+      <button type="button" id="confirm-ok" class="primary" value="ok">実行する</button>
+      <button type="button" id="confirm-cancel" value="cancel">キャンセル</button>
+    </div>
+  </form>
+</dialog>
+
+<script id="sudoku-core">
+/* =============================================================================
+ * SudokuCore — DOM に依存しない数独の計算ロジック
+ * -----------------------------------------------------------------------------
+ * ・このスクリプトは「純粋な計算」だけを持ち、DOM を一切参照しない。
+ * ・同じソースをメインスレッド（この script タグ）と、Blob から作る Web Worker の
+ *   両方で実行する。ファイル末尾の Worker グルーは document が無い環境でのみ動く。
+ * ・重い探索はすべてジェネレータ（function*）で実装し、
+ *      - Worker 側: runSync() で一気に最後まで回す（UI スレッドを止めない）
+ *      - Worker 不可のフォールバック側: 一定時間ごとに yield して分割実行する
+ *   という 2 通りの駆動方法を取れるようにしている。
+ * ・探索関数は元の盤面を書き換えない（内部で Int8Array にコピーしてから探索する）。
+ * ===========================================================================*/
+var SudokuCore = (function () {
+  'use strict';
+
+  var FULL_MASK = 0x3FE;               // bit1..bit9 = 数字 1..9
+  var TECHNIQUE_NAMES = {
+    naked_single: '裸のシングル',
+    hidden_single_row: '行の隠れたシングル',
+    hidden_single_col: '列の隠れたシングル',
+    hidden_single_box: 'ブロックの隠れたシングル'
+  };
+
+  /* ---------------------------------------------------------------- 基本操作 */
+
+  /** 9x9 の空盤面（0 = 空欄）を新規作成する。 */
+  function createBoard() {
+    var b = [];
+    for (var r = 0; r < 9; r++) {
+      var row = [];
+      for (var c = 0; c < 9; c++) row.push(0);
+      b.push(row);
+    }
+    return b;
+  }
+
+  /** 盤面の深いコピー（参照共有による破壊を防ぐ）。 */
+  function cloneBoard(board) {
+    var o = [];
+    for (var r = 0; r < 9; r++) o.push(board[r].slice());
+    return o;
+  }
+
+  /** 9x9 の空メモ（各マスは昇順の数字配列）を作る。 */
+  function createNotes() {
+    var n = [];
+    for (var r = 0; r < 9; r++) {
+      var row = [];
+      for (var c = 0; c < 9; c++) row.push([]);
+      n.push(row);
+    }
+    return n;
+  }
+
+  /** メモの深いコピー（各マスの配列も複製し昇順に正規化する）。 */
+  function cloneNotes(notes) {
+    var o = [];
+    for (var r = 0; r < 9; r++) {
+      var row = [];
+      for (var c = 0; c < 9; c++) {
+        var list = notes && notes[r] && notes[r][c] ? notes[r][c] : [];
+        row.push(list.slice().sort(function (a, b) { return a - b; }));
+      }
+      o.push(row);
+    }
+    return o;
+  }
+
+  /** 数字盤面を 81 文字の文字列に正規化する（ヒントの識別キー・保存に使用）。 */
+  function boardKey(board) {
+    var s = '';
+    for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) s += board[r][c];
+    return s;
+  }
+
+  function sameBoard(a, b) {
+    for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) if (a[r][c] !== b[r][c]) return false;
+    return true;
+  }
+
+  function boxIndex(r, c) { return ((r / 3) | 0) * 3 + ((c / 3) | 0); }
+
+  function unitCells(type, index) {
+    var out = [], i;
+    if (type === 'row') { for (i = 0; i < 9; i++) out.push([index, i]); }
+    else if (type === 'col') { for (i = 0; i < 9; i++) out.push([i, index]); }
+    else {
+      var br = ((index / 3) | 0) * 3, bc = (index % 3) * 3;
+      for (var r = 0; r < 3; r++) for (var c = 0; c < 3; c++) out.push([br + r, bc + c]);
+    }
+    return out;
+  }
+
+  function unitLabel(unit) {
+    if (unit.type === 'row') return (unit.index + 1) + '行目';
+    if (unit.type === 'col') return (unit.index + 1) + '列目';
+    return 'ブロック' + (unit.index + 1);
+  }
+
+  /** マスが属する行・列・ブロック（根拠ユニットの表示用）。 */
+  function unitsOf(r, c) {
+    return [
+      { type: 'row', index: r, label: unitLabel({ type: 'row', index: r }) },
+      { type: 'col', index: c, label: unitLabel({ type: 'col', index: c }) },
+      { type: 'box', index: boxIndex(r, c), label: unitLabel({ type: 'box', index: boxIndex(r, c) }) }
+    ];
+  }
+
+  function popcount(m) { var c = 0; while (m) { m &= m - 1; c++; } return c; }
+  function bitToDigit(bit) { return 31 - Math.clz32(bit); }
+  function maskToDigits(mask) {
+    var out = [];
+    for (var d = 1; d <= 9; d++) if (mask & (1 << d)) out.push(d);
+    return out;
+  }
+
+  /* ---------------------------------------------------------------- 検証系 */
+
+  /** 9x9 配列で、値が 0〜9 の整数だけであることを検証する。 */
+  function isValidBoardShape(board) {
+    if (!board || !board.length || board.length !== 9) return false;
+    for (var r = 0; r < 9; r++) {
+      var row = board[r];
+      if (!row || row.length !== 9) return false;
+      for (var c = 0; c < 9; c++) {
+        var v = row[c];
+        if (typeof v !== 'number' || !isFinite(v) || v < 0 || v > 9 || Math.floor(v) !== v) return false;
+      }
+    }
+    return true;
+  }
+
+  /** 行・列・ブロックの重複を検出し、関係するマスの位置(index=r*9+c)を昇順で返す。 */
+  function findDuplicates(board) {
+    var marked = {};
+    var types = ['row', 'col', 'box'];
+    for (var t = 0; t < types.length; t++) {
+      for (var i = 0; i < 9; i++) {
+        var cells = unitCells(types[t], i);
+        var seen = {};
+        for (var j = 0; j < cells.length; j++) {
+          var r = cells[j][0], c = cells[j][1], v = board[r][c];
+          if (v === 0) continue;                       // 空欄は重複判定の対象外
+          if (!seen[v]) seen[v] = [];
+          seen[v].push(r * 9 + c);
+        }
+        for (var d = 1; d <= 9; d++) {
+          if (seen[d] && seen[d].length > 1) {
+            for (var k = 0; k < seen[d].length; k++) marked[seen[d][k]] = true;
+          }
+        }
+      }
+    }
+    return Object.keys(marked).map(Number).sort(function (a, b) { return a - b; });
+  }
+
+  function hasDuplicates(board) { return findDuplicates(board).length > 0; }
+
+  /** 全マスが埋まり、かつ重複が無い＝完成盤面かどうか。 */
+  function isCompleteValid(board) {
+    if (!isValidBoardShape(board)) return false;
+    for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) if (board[r][c] === 0) return false;
+    return !hasDuplicates(board);
+  }
+
+  /* ---------------------------------------------------------------- 候補計算 */
+
+  /**
+   * 論理用候補: 空欄マスについて、行・列・ブロックの既存数字を除いた候補を昇順で返す。
+   * 正解盤面・候補メモ・選択状態は一切参照しない。
+   */
+  function getCandidates(board, r, c) {
+    if (board[r][c] !== 0) return [];
+    var used = 0, i;
+    for (i = 0; i < 9; i++) { used |= 1 << board[r][i]; used |= 1 << board[i][c]; }
+    var cells = unitCells('box', boxIndex(r, c));
+    for (i = 0; i < cells.length; i++) used |= 1 << board[cells[i][0]][cells[i][1]];
+    return maskToDigits(FULL_MASK & ~used);
+  }
+
+  /** 全マスの候補をまとめて計算する（探索順の判定を高速化するための内部利用）。 */
+  function computeAllCandidates(board) {
+    var out = [];
+    for (var r = 0; r < 9; r++) {
+      var row = [];
+      for (var c = 0; c < 9; c++) row.push(getCandidates(board, r, c));
+      out.push(row);
+    }
+    return out;
+  }
+
+  /**
+   * 候補にもとづく矛盾検査。
+   *  1) 候補が 0 個の空欄
+   *  2) 行・列・ブロックで、未配置の数字を置ける空欄が 0 個
+   * ※ この検査だけでは「解なし」をすべて検出できるわけではない（仕様どおり）。
+   * ※ 候補メモの内容は一切見ない。
+   */
+  function checkContradiction(board, cand) {
+    var problems = [];
+    cand = cand || computeAllCandidates(board);
+    var r, c, i, d;
+    for (r = 0; r < 9; r++) for (c = 0; c < 9; c++) {
+      if (board[r][c] === 0 && cand[r][c].length === 0) problems.push({ kind: 'cell', row: r, col: c });
+    }
+    var types = ['row', 'col', 'box'];
+    for (var t = 0; t < types.length; t++) {
+      for (i = 0; i < 9; i++) {
+        var cells = unitCells(types[t], i);
+        var placed = {};
+        for (var j = 0; j < cells.length; j++) {
+          var v = board[cells[j][0]][cells[j][1]];
+          if (v) placed[v] = true;
+        }
+        for (d = 1; d <= 9; d++) {
+          if (placed[d]) continue;
+          var spots = 0;
+          for (var k = 0; k < cells.length; k++) {
+            var rr = cells[k][0], cc = cells[k][1];
+            if (board[rr][cc] === 0 && cand[rr][cc].indexOf(d) >= 0) spots++;
+          }
+          if (spots === 0) problems.push({ kind: 'unit', unit: { type: types[t], index: i }, digit: d });
+        }
+      }
+    }
+    return { contradiction: problems.length > 0, problems: problems };
+  }
+
+  /* ---------------------------------------------------------------- 乱数 */
+
+  /** 再現可能な擬似乱数（mulberry32）。テストではシードを固定して使う。 */
+  function createRandom(seed) {
+    var s = (seed >>> 0) || 1;
+    return function () {
+      s |= 0; s = (s + 0x6D2B79F5) | 0;
+      var t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function shuffledIndices(rand) {
+    var a = [];
+    for (var i = 0; i < 81; i++) a.push(i);
+    for (var j = 80; j > 0; j--) {
+      var k = Math.floor(rand() * (j + 1));
+      var tmp = a[j]; a[j] = a[k]; a[k] = tmp;
+    }
+    return a;
+  }
+
+  function shuffleInPlace(arr, rand) {
+    for (var j = arr.length - 1; j > 0; j--) {
+      var k = Math.floor(rand() * (j + 1));
+      var tmp = arr[j]; arr[j] = arr[k]; arr[k] = tmp;
+    }
+    return arr;
+  }
+
+  /* ---------------------------------------------------------------- 解探索 */
+
+  function unflatten(b) {
+    var out = [];
+    for (var r = 0; r < 9; r++) {
+      var row = [];
+      for (var c = 0; c < 9; c++) row.push(b[r * 9 + c]);
+      out.push(row);
+    }
+    return out;
+  }
+
+  /**
+   * 解を数えるジェネレータ（MRV で候補の少ないマスを優先）。
+   * opts.limit     : 見つける解数の上限（既定 2）。上限に達したら 'limit' で打ち切る。
+   * opts.shouldStop: 分割実行時のキャンセル判定（毎 512 ノードで呼ぶ）
+   * opts.deadline  : 期限時刻(ms)。過ぎたら 'time' で打ち切る。
+   * 戻り値: { count, complete, aborted: null|'limit'|'cancelled'|'time', solution, nodes }
+   *   complete === true のときだけ「数え切った」とみなせる。
+   * 元の盤面は変更しない（内部コピーで探索する）。
+   */
+  function* solveTask(board, opts) {
+    opts = opts || {};
+    var limit = opts.limit || 2;
+    var shouldStop = opts.shouldStop || null;
+    var deadline = opts.deadline || 0;
+    var b = new Int8Array(81);
+    var rowM = new Int32Array(9), colM = new Int32Array(9), boxM = new Int32Array(9);
+    for (var i = 0; i < 81; i++) {
+      var v = board[(i / 9) | 0][i % 9];
+      b[i] = v;
+      if (v) {
+        var r = (i / 9) | 0, c = i % 9, m = 1 << v;
+        rowM[r] |= m; colM[c] |= m; boxM[boxIndex(r, c)] |= m;
+      }
+    }
+    var count = 0, first = null, nodes = 0, aborted = null;
+
+    function* dfs() {
+      if (aborted) return;
+      nodes++;
+      if ((nodes & 511) === 0) {          // 分割実行のための制御返却点
+        yield;
+        if (shouldStop && shouldStop()) { aborted = 'cancelled'; return; }
+        if (deadline && Date.now() > deadline) { aborted = 'time'; return; }
+      }
+      var best = -1, bestMask = 0, bestN = 10;
+      for (var i = 0; i < 81; i++) {
+        if (b[i]) continue;
+        var r = (i / 9) | 0, c = i % 9, bi = boxIndex(r, c);
+        var cand = FULL_MASK & ~(rowM[r] | colM[c] | boxM[bi]);
+        if (cand === 0) return;           // この枝は解なし
+        var n = popcount(cand);
+        if (n < bestN) { bestN = n; best = i; bestMask = cand; if (n === 1) break; }
+      }
+      if (best < 0) {                     // 全マス確定 = 解を 1 つ発見
+        count++;
+        if (count === 1) first = unflatten(b);
+        if (count >= limit) aborted = aborted || 'limit';
+        return;
+      }
+      var br = (best / 9) | 0, bc = best % 9, bbi = boxIndex(br, bc);
+      var m2 = bestMask;
+      while (m2) {
+        var bit = m2 & -m2; m2 ^= bit;
+        var d = bitToDigit(bit);
+        b[best] = d; rowM[br] |= bit; colM[bc] |= bit; boxM[bbi] |= bit;
+        yield* dfs();
+        b[best] = 0; rowM[br] &= ~bit; colM[bc] &= ~bit; boxM[bbi] &= ~bit;
+        if (aborted) return;
+      }
+    }
+
+    yield* dfs();
+    return { count: count, complete: aborted === null, aborted: aborted, solution: first, nodes: nodes };
+  }
+
+  /** ジェネレータを同期的に最後まで回す（Worker 側で使用）。 */
+  function runSync(gen) {
+    var res = gen.next();
+    while (!res.done) res = gen.next();
+    return res.value;
+  }
+
+  /**
+   * 解探索結果の分類。
+   *  'multiple'  複数解（2 個見つけた時点で打ち切り）
+   *  'unique'    唯一解（探索完了）
+   *  'none'      解なし（探索完了）
+   *  'cancelled' キャンセル
+   *  'limited'   時間制限・探索制限で未完了（唯一解とも解なしとも断定しない）
+   */
+  function classifySolveResult(res) {
+    if (res.count >= 2) return 'multiple';
+    if (res.count === 1 && res.complete) return 'unique';
+    if (res.count === 0 && res.complete) return 'none';
+    if (res.aborted === 'cancelled') return 'cancelled';
+    return 'limited';
+  }
+
+  /* ---------------------------------------------------------------- 生成 */
+
+  /** ランダム性を加えたバックトラッキングで完成盤面を作る。 */
+  function* generateSolvedBoardTask(rand) {
+    var b = new Int8Array(81);
+    var rowM = new Int32Array(9), colM = new Int32Array(9), boxM = new Int32Array(9);
+    var guard = 0;
+    function* fill(k) {
+      if (k === 81) return true;
+      if ((++guard & 1023) === 0) yield;
+      var r = (k / 9) | 0, c = k % 9, bi = boxIndex(r, c);
+      var cands = shuffleInPlace(maskToDigits(FULL_MASK & ~(rowM[r] | colM[c] | boxM[bi])), rand);
+      for (var j = 0; j < cands.length; j++) {
+        var d = cands[j], bit = 1 << d;
+        b[k] = d; rowM[r] |= bit; colM[c] |= bit; boxM[bi] |= bit;
+        var ok = yield* fill(k + 1);
+        if (ok) return true;
+        b[k] = 0; rowM[r] &= ~bit; colM[c] &= ~bit; boxM[bi] &= ~bit;
+      }
+      return false;
+    }
+    yield* fill(0);
+    return unflatten(b);
+  }
+
+  /**
+   * 唯一解の問題を生成するジェネレータ。
+   * opts: { minClues, maxClues, maxAttempts, deadline, shouldStop, rand | seed }
+   * 戻り値: { ok:true, puzzle, solution, clues, attempts } /
+   *         { ok:false, reason:'cancelled'|'time'|'attempts', attempts }
+   *
+   * 手順:
+   *  1) 完成盤面を作る
+   *  2) マスを 1 つずつ取り除き、その都度「解が 1 つだけ」であることを検証する
+   *  3) 複数解になったら取り除きを取り消す
+   *  4) 中止・時間切れで一意性を確認できなかった場合も取り除きを確定しない
+   *  5) 目標の初期配置数に届くまで、順序を変えて繰り返す
+   *  6) 完成した問題は、最後にもう一度「唯一解」と solutionBoard の一致を再検証する
+   * 指定範囲の問題が作れなければ ok:false を返し、範囲外の問題を黙って提供しない。
+   */
+  function* generateTask(opts) {
+    opts = opts || {};
+    var minClues = opts.minClues, maxClues = opts.maxClues;
+    var maxAttempts = opts.maxAttempts || 400;
+    var deadline = opts.deadline || 0;
+    var shouldStop = opts.shouldStop || null;
+    var rand = opts.rand || createRandom(opts.seed || (Date.now() & 0x7fffffff));
+    var attempts = 0;
+
+    function stopped() {
+      if (shouldStop && shouldStop()) return 'cancelled';
+      if (deadline && Date.now() > deadline) return 'time';
+      return null;
+    }
+
+    while (true) {
+      var stop = stopped();
+      if (stop) return { ok: false, reason: stop, attempts: attempts };
+      if (attempts >= maxAttempts) return { ok: false, reason: 'attempts', attempts: attempts };
+      attempts++;
+
+      var solution = yield* generateSolvedBoardTask(rand);
+      var board = cloneBoard(solution);
+      var target = minClues + Math.floor(rand() * (maxClues - minClues + 1));
+      var clues = 81;
+      var improved = true;
+
+      // 目標の初期配置数に届くまで、ランダムな順序で掘り続ける
+      while (improved && clues > target) {
+        improved = false;
+        var order = shuffledIndices(rand);
+        for (var i = 0; i < order.length && clues > target; i++) {
+          stop = stopped();
+          if (stop) return { ok: false, reason: stop, attempts: attempts };
+          var pos = order[i], r = (pos / 9) | 0, c = pos % 9;
+          if (board[r][c] === 0) continue;
+          var save = board[r][c];
+          board[r][c] = 0;
+          var res = yield* solveTask(board, { limit: 2, shouldStop: shouldStop, deadline: deadline });
+          if (res.aborted === 'cancelled') { board[r][c] = save; return { ok: false, reason: 'cancelled', attempts: attempts }; }
+          if (res.aborted === 'time') { board[r][c] = save; return { ok: false, reason: 'time', attempts: attempts }; }
+          if (res.count === 1 && res.complete) { clues--; improved = true; }
+          else board[r][c] = save;                 // 複数解になったら取り消す
+        }
+      }
+
+      if (clues >= minClues && clues <= maxClues) {
+        // 完成した問題の最終再検証（唯一解 & 保存する正解との一致）
+        var verify = yield* solveTask(board, { limit: 2, shouldStop: shouldStop, deadline: deadline });
+        if (verify.aborted === 'cancelled') return { ok: false, reason: 'cancelled', attempts: attempts };
+        if (verify.aborted === 'time') return { ok: false, reason: 'time', attempts: attempts };
+        if (verify.count === 1 && verify.complete && verify.solution && sameBoard(verify.solution, solution)) {
+          return { ok: true, puzzle: board, solution: solution, clues: clues, attempts: attempts };
+        }
+      }
+    }
+  }
+
+  /* ---------------------------------------------------------------- 次の一手 */
+
+  function makeFound(row, col, digit, technique, cand, units, reason) {
+    return {
+      status: 'found',
+      row: row, col: col, digit: digit,
+      technique: technique,
+      techniqueName: TECHNIQUE_NAMES[technique],
+      candidates: cand.slice(),
+      units: units,
+      reason: reason
+    };
+  }
+
+  function hiddenSingleInUnit(board, cand, type, index) {
+    var cells = unitCells(type, index);
+    var placed = {};
+    for (var j = 0; j < cells.length; j++) {
+      var v = board[cells[j][0]][cells[j][1]];
+      if (v) placed[v] = true;
+    }
+    for (var d = 1; d <= 9; d++) {
+      if (placed[d]) continue;
+      var spots = [];
+      for (var k = 0; k < cells.length; k++) {
+        var r = cells[k][0], c = cells[k][1];
+        if (board[r][c] === 0 && cand[r][c].indexOf(d) >= 0) spots.push([r, c]);
+      }
+      if (spots.length === 1) {
+        var rr = spots[0][0], cc = spots[0][1];
+        var unit = { type: type, index: index, label: unitLabel({ type: type, index: index }) };
+        var reason = type === 'row'
+          ? (index + 1) + '行目で、' + d + 'を置ける空欄はこのマスだけです。'
+          : type === 'col'
+            ? (index + 1) + '列目で、' + d + 'を置ける空欄はこのマスだけです。'
+            : 'ブロック' + (index + 1) + 'で、' + d + 'を置ける空欄はこのマスだけです。';
+        return makeFound(rr, cc, d, 'hidden_single_' + type, cand[rr][cc], [unit], reason);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 論理的に確定できる次の一手を探す純粋関数。
+   * 引数は「数字盤面」のみ。solutionBoard や候補メモは引数にも外部からも参照しない。
+   * 戻り値の status:
+   *   'found'        一手を発見（row, col, digit, technique, candidates, units, reason）
+   *   'none'         対応手法では未発見（解なしの断定ではない）
+   *   'contradiction' 候補・配置場所に矛盾
+   *   'complete'     有効な完成盤面
+   *   'invalid'      形式・範囲・重複が不正
+   * 元の盤面は変更しない。
+   */
+  function findLogicalHint(board) {
+    // 1) 形式・範囲の検証
+    if (!isValidBoardShape(board)) {
+      return { status: 'invalid', reason: '盤面の形式が正しくありません（9×9 の 0〜9 の整数が必要です）。' };
+    }
+    // 2) 重複の検証
+    var dups = findDuplicates(board);
+    if (dups.length > 0) {
+      return { status: 'invalid', reason: '同じ行・列・ブロックに同じ数字が重複しています。', duplicates: dups };
+    }
+    // 3) 完成確認
+    if (isCompleteValid(board)) return { status: 'complete' };
+
+    // 4) 候補計算と盤面全体の矛盾検査
+    var cand = computeAllCandidates(board);
+    var contra = checkContradiction(board, cand);
+    if (contra.contradiction) return { status: 'contradiction', problems: contra.problems };
+
+    // 5) 論理手法の検索（仕様の優先順・昇順）
+    var r, c, d, res;
+    // 5-1 裸のシングル: 行→列の昇順で最初に見つかったもの
+    for (r = 0; r < 9; r++) {
+      for (c = 0; c < 9; c++) {
+        if (board[r][c] !== 0) continue;
+        if (cand[r][c].length === 1) {
+          d = cand[r][c][0];
+          return makeFound(r, c, d, 'naked_single', cand[r][c], unitsOf(r, c),
+            '同じ行・列・ブロックにある数字を除くと、このマスの候補は' + d + 'だけになります。');
+        }
+      }
+    }
+    // 5-2 行の隠れたシングル（行番号・数字の昇順）
+    for (r = 0; r < 9; r++) {
+      res = hiddenSingleInUnit(board, cand, 'row', r);
+      if (res) return res;
+    }
+    // 5-3 列の隠れたシングル（列番号・数字の昇順）
+    for (c = 0; c < 9; c++) {
+      res = hiddenSingleInUnit(board, cand, 'col', c);
+      if (res) return res;
+    }
+    // 5-4 ブロックの隠れたシングル（左上から右へ、次に下へ／数字の昇順）
+    for (var bi = 0; bi < 9; bi++) {
+      res = hiddenSingleInUnit(board, cand, 'box', bi);
+      if (res) return res;
+    }
+    return { status: 'none' };
+  }
+
+  /* ---------------------------------------------------------------- インポート */
+
+  /**
+   * 81 文字のテキストを盤面へ変換する。
+   * 1〜9 は数字、0 または '.' は空欄。空白・改行・タブは除去してから検証する。
+   * 不正な場合は ok:false を返し、呼び出し側は盤面を変更しない。
+   */
+  function normalizeImport(text) {
+    if (typeof text !== 'string') return { ok: false, reason: '入力が文字列ではありません。' };
+    var s = text.replace(/[\s\u3000]/g, '');
+    if (s.length === 0) return { ok: false, reason: '問題データが入力されていません。' };
+    var bad = s.match(/[^0-9.]/g);
+    if (bad) return { ok: false, reason: '使用できない文字が含まれています: ' + bad.slice(0, 5).join(' ') + '（1〜9 の数字、0 または . のみ使用できます）' };
+    if (s.length !== 81) return { ok: false, reason: '文字数が ' + s.length + ' 文字です。空白を除いて 81 文字にしてください。' };
+    var board = createBoard();
+    for (var i = 0; i < 81; i++) {
+      var ch = s.charAt(i);
+      board[(i / 9) | 0][i % 9] = (ch === '0' || ch === '.') ? 0 : parseInt(ch, 10);
+    }
+    return { ok: true, board: board, duplicates: findDuplicates(board) };
+  }
+
+  /* ---------------------------------------------------------------- Worker */
+
+  /**
+   * Blob から作った Worker 内でのメッセージ処理。
+   * document が無い（= Worker コンテキスト）ときだけ登録される。
+   * 受信: { type:'run', taskId, kind:'generate'|'solve', params }
+   * 送信: { type:'result', taskId, ok:true, payload } / { type:'error', taskId, message }
+   */
+  if (typeof document === 'undefined' && typeof self !== 'undefined' && typeof self.postMessage === 'function') {
+    self.onmessage = function (e) {
+      var msg = e.data || {};
+      if (msg.type !== 'run') return;
+      try {
+        var payload;
+        if (msg.kind === 'generate') {
+          payload = runSync(generateTask(msg.params || {}));
+        } else if (msg.kind === 'solve') {
+          var p = msg.params || {};
+          payload = runSync(solveTask(p.board, { limit: p.limit || 2, deadline: p.deadline || 0 }));
+        } else {
+          throw new Error('未知の処理種別です: ' + msg.kind);
+        }
+        self.postMessage({ type: 'result', taskId: msg.taskId, ok: true, payload: payload });
+      } catch (err) {
+        self.postMessage({ type: 'error', taskId: msg.taskId, ok: false, message: String(err && err.message ? err.message : err) });
+      }
+    };
+  }
+
+  /* ---------------------------------------------------------------- 公開 API */
+
+  return {
+    FULL_MASK: FULL_MASK,
+    TECHNIQUE_NAMES: TECHNIQUE_NAMES,
+    createBoard: createBoard,
+    cloneBoard: cloneBoard,
+    createNotes: createNotes,
+    cloneNotes: cloneNotes,
+    boardKey: boardKey,
+    sameBoard: sameBoard,
+    boxIndex: boxIndex,
+    unitCells: unitCells,
+    unitLabel: unitLabel,
+    unitsOf: unitsOf,
+    isValidBoardShape: isValidBoardShape,
+    findDuplicates: findDuplicates,
+    hasDuplicates: hasDuplicates,
+    isCompleteValid: isCompleteValid,
+    getCandidates: getCandidates,
+    computeAllCandidates: computeAllCandidates,
+    checkContradiction: checkContradiction,
+    createRandom: createRandom,
+    shuffledIndices: shuffledIndices,
+    solveTask: solveTask,
+    runSync: runSync,
+    classifySolveResult: classifySolveResult,
+    generateSolvedBoardTask: generateSolvedBoardTask,
+    generateTask: generateTask,
+    findLogicalHint: findLogicalHint,
+    normalizeImport: normalizeImport
+  };
+})();
+</script>
+<script id="sudoku-tests">
+/* =============================================================================
+ * SudokuTests — 計算ロジックの自動テスト（DOM に依存しない）
+ * -----------------------------------------------------------------------------
+ * ・固定盤面は、本アプリとは別実装のソルバー（Python）で「仕様の検出順で
+ *   最初に見つかる手法」を確定させたものを使用している。
+ * ・SudokuTests.list() でテスト名一覧、runOne(i) で 1 件ずつ、
+ *   run() でまとめて実行できる（ブラウザ UI は runOne を分割実行する）。
+ * ・期待値だけでなく「先に検出される手法が存在しないこと」も独立スキャンで検証する。
+ * ===========================================================================*/
+var SudokuTests = (function () {
+  'use strict';
+  var C = SudokuCore;
+
+  /** 81 文字の文字列を 9x9 配列にする（テスト用の固定盤面の記述に使用）。 */
+  function B(s) {
+    var b = [];
+    for (var r = 0; r < 9; r++) {
+      var row = [];
+      for (var c = 0; c < 9; c++) row.push(parseInt(s.charAt(r * 9 + c), 10));
+      b.push(row);
+    }
+    return b;
+  }
+
+  /* ---- 固定テスト盤面（Python 実装で期待値を確定済み） ---- */
+  var FIX = {
+    // 裸のシングルが最初に検出される唯一解の問題（期待: 2行1列に 7）
+    nakedBoard: '852001090090402106004509200901208043605300900300904500230000800006003000400800370',
+    nakedSolution: '852631794793482156164579238971258643645317982328964517237145869586793421419826375',
+    // 行の隠れたシングル（期待: 2行9列に 6）※裸のシングルは存在しない
+    hiddenRowBoard: '000400007143008000078006400010800040039000602004207000000049000050780960000000008',
+    // 列の隠れたシングル（期待: 6行7列に 2）※裸・行の隠れは存在しない
+    hiddenColBoard: '400000000580903002201780006000090370002000008000800094010000003324600009000300020',
+    // ブロックの隠れたシングル（期待: 8行7列に 8）※裸・行・列の隠れは存在しない
+    hiddenBoxBoard: '304057298070800300000030706000010000007000100000020600200080000000370060700096430',
+    // 複数解（4マスの交換可能な矩形を空けた盤面）
+    multipleBoard: '618905302547823961293601508452196837361587294789432156836719425974258613125364789',
+    // 重複なしだが解なし
+    noSolutionBoard: '000750900780903060602004300541697000003140006007000100000060720000875003079320650',
+    // 重複あり（(1行1列) と (1行2列) がともに 4）
+    duplicateBoard: '441286793678935142239174568516842379327569814984713256145398627763421985892657431',
+    // 候補0個のマス（1行3列）＋別の場所に裸のシングル
+    contraCellBoard: '700345018908701400346000000635400087209578304870600000462100095007950032000820741',
+    // 候補0個のマスは無いが、2列目で 1 を置ける空欄が無い＋別の場所に裸のシングル
+    contraUnitBoard: '580036940060081502420790080094002150030604890170053060001048600800000430302509708'
+  };
+
+  /* ---- テスト登録 ---- */
+  var tests = [];
+  function test(name, fn, slow) { tests.push({ name: name, fn: fn, slow: !!slow }); }
+  function ok(cond, msg) { if (!cond) throw new Error(msg); }
+  function eq(actual, expected, label) {
+    if (actual !== expected) throw new Error(label + ' — 期待: ' + expected + ' / 実際: ' + actual);
+  }
+  function eqBoard(actual, expected, label) {
+    var a = C.boardKey(actual), e = C.boardKey(expected);
+    if (a !== e) throw new Error(label + ' — 盤面が一致しません\n期待: ' + e + '\n実際: ' + a);
+  }
+
+  /* ---- 独立スキャン（findLogicalHint の検出順を経由せず条件を確認する） ---- */
+  function scanNakedSingle(board) {
+    for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
+      if (board[r][c] !== 0) continue;
+      var cand = C.getCandidates(board, r, c);
+      if (cand.length === 1) return { row: r, col: c, digit: cand[0] };
+    }
+    return null;
+  }
+  function scanHiddenSingle(board, type) {
+    for (var i = 0; i < 9; i++) {
+      var cells = C.unitCells(type, i), placed = {};
+      for (var j = 0; j < cells.length; j++) {
+        var v = board[cells[j][0]][cells[j][1]];
+        if (v) placed[v] = true;
+      }
+      for (var d = 1; d <= 9; d++) {
+        if (placed[d]) continue;
+        var spots = [];
+        for (var k = 0; k < cells.length; k++) {
+          var r = cells[k][0], c = cells[k][1];
+          if (board[r][c] === 0 && C.getCandidates(board, r, c).indexOf(d) >= 0) spots.push([r, c]);
+        }
+        if (spots.length === 1) return { type: type, index: i, row: spots[0][0], col: spots[0][1], digit: d };
+      }
+    }
+    return null;
+  }
+
+  /* ============================== 1. 基本処理 ============================== */
+
+  test('重複検出：行・列・ブロックの重複を検出し、空欄は対象外', function () {
+    var b = C.createBoard();
+    b[0][0] = 5; b[0][4] = 5;                 // 同じ行の重複
+    b[3][1] = 7; b[6][1] = 7;                 // 同じ列の重複
+    b[4][4] = 9; b[5][5] = 9;                 // 同じブロックの重複
+    var dups = C.findDuplicates(b);
+    ok(dups.length === 6, '重複マスは 6 個のはず: ' + dups.length);
+    ok(dups.indexOf(0) >= 0 && dups.indexOf(4) >= 0, '1行1列と1行5列が重複として検出されること');
+    ok(dups.indexOf(28) >= 0 && dups.indexOf(55) >= 0, '同じ列の重複が検出されること');
+    ok(dups.indexOf(40) >= 0 && dups.indexOf(50) >= 0, '同じブロックの重複が検出されること');
+    ok(C.findDuplicates(C.createBoard()).length === 0, '空欄だけの盤面は重複なし');
+    // 候補メモ（別管理のデータ）は重複判定に影響しないこと
+    var notes = C.createNotes();
+    notes[0][1] = [5];
+    ok(C.findDuplicates(b).length === 6, '候補メモは重複判定に影響しないこと');
+  });
+
+  test('完成盤面の判定：有効な完成盤面と重複のある満杯盤面を区別', function () {
+    var solved = B(FIX.nakedSolution);
+    ok(C.isCompleteValid(solved), '唯一解の正解盤面は有効な完成盤面');
+    ok(C.findLogicalHint(solved).status === 'complete', 'ヒント関数も complete を返す');
+    var dupFull = C.cloneBoard(solved);
+    dupFull[0][1] = dupFull[0][0];
+    ok(!C.isCompleteValid(dupFull), '重複のある満杯盤面は完成とみなさない');
+    var incomplete = C.cloneBoard(solved);
+    incomplete[8][8] = 0;
+    ok(!C.isCompleteValid(incomplete), '空欄がある盤面は完成とみなさない');
+  });
+
+  test('解数の判定：唯一解／複数解／解なし（重複なし）／重複あり', function () {
+    var u = C.runSync(C.solveTask(B(FIX.nakedBoard), { limit: 2 }));
+    eq(C.classifySolveResult(u), 'unique', '固定盤面は唯一解');
+    eqBoard(u.solution, B(FIX.nakedSolution), '保存された正解と一致');
+
+    var m = C.runSync(C.solveTask(B(FIX.multipleBoard), { limit: 2 }));
+    eq(C.classifySolveResult(m), 'multiple', '矩形を空けた盤面は複数解');
+    ok(m.count >= 2, '2 個以上の解が見つかること');
+
+    var n = C.runSync(C.solveTask(B(FIX.noSolutionBoard), { limit: 2 }));
+    eq(C.classifySolveResult(n), 'none', '重複なしだが解なしの盤面');
+    eq(n.count, 0, '解の個数は 0');
+    eq(n.complete, true, '探索は完了していること');
+
+    var d = B(FIX.duplicateBoard);
+    ok(C.hasDuplicates(d), '重複ありの盤面を検出できること');
+    eq(C.findDuplicates(d).indexOf(0) >= 0, true, '1行1列が重複に関与');
+    eq(C.findDuplicates(d).indexOf(1) >= 0, true, '1行2列が重複に関与');
+  });
+
+  test('探索が元の盤面を変更しない', function () {
+    var src = B(FIX.nakedBoard);
+    var before = C.boardKey(src);
+    C.runSync(C.solveTask(src, { limit: 2 }));
+    eq(C.boardKey(src), before, '解探索後も盤面が変わらないこと');
+    var multi = B(FIX.multipleBoard), mBefore = C.boardKey(multi);
+    C.runSync(C.solveTask(multi, { limit: 2 }));
+    eq(C.boardKey(multi), mBefore, '複数解の探索でも盤面が変わらないこと');
+  });
+
+  test('探索未完了（limit=1 で打ち切り）を唯一解と誤判定しない', function () {
+    var r = C.runSync(C.solveTask(B(FIX.nakedBoard), { limit: 1 }));
+    eq(r.count, 1, '解を 1 個発見');
+    eq(r.complete, false, '探索は完了していない');
+    eq(r.aborted, 'limit', '打ち切り理由は limit');
+    eq(C.classifySolveResult(r), 'limited', '唯一解とも解なしとも判定しない');
+  });
+
+  /* ============================== 2. 生成 ============================== */
+
+  function genTest(minClues, maxClues, seed) {
+    var res = C.runSync(C.generateTask({
+      minClues: minClues, maxClues: maxClues, seed: seed,
+      maxAttempts: 400, deadline: Date.now() + 60000
+    }));
+    ok(res.ok === true, '生成に成功すること（reason=' + res.reason + '）');
+    var clues = 0;
+    for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) if (res.puzzle[r][c] !== 0) clues++;
+    eq(clues, res.clues, '初期配置数の申告が実際と一致');
+    ok(clues >= minClues && clues <= maxClues, '初期配置数が範囲内であること: ' + clues);
+    var verify = C.runSync(C.solveTask(res.puzzle, { limit: 2 }));
+    eq(C.classifySolveResult(verify), 'unique', '生成問題は唯一解');
+    eqBoard(verify.solution, res.solution, '生成した正解盤面と一致');
+    ok(C.isCompleteValid(res.solution), '正解盤面は有効な完成盤面');
+    // 初期配置は正解と一致していること
+    for (var r2 = 0; r2 < 9; r2++) for (var c2 = 0; c2 < 9; c2++) {
+      if (res.puzzle[r2][c2] !== 0 && res.puzzle[r2][c2] !== res.solution[r2][c2]) {
+        throw new Error('初期配置が正解と食い違っています (' + (r2 + 1) + '行' + (c2 + 1) + '列)');
+      }
+    }
+    return res;
+  }
+
+  test('生成：やさしい（初期配置 40〜46 個・唯一解）', function () {
+    var res = genTest(40, 46, 20261013);
+    ok(res.clues >= 40 && res.clues <= 46, 'やさしいの初期配置数: ' + res.clues);
+  }, true);
+
+  test('生成：ふつう（初期配置 32〜39 個・唯一解）', function () {
+    var res = genTest(32, 39, 1234567);
+    ok(res.clues >= 32 && res.clues <= 39, 'ふつうの初期配置数: ' + res.clues);
+  }, true);
+
+  test('生成：むずかしい（初期配置 26〜31 個・唯一解）', function () {
+    var res = genTest(26, 31, 987654321);
+    ok(res.clues >= 26 && res.clues <= 31, 'むずかしいの初期配置数: ' + res.clues);
+  }, true);
+
+  test('生成：指定範囲の問題を作れない場合は失敗を返す（範囲外を成功として返さない）', function () {
+    var res = C.runSync(C.generateTask({
+      minClues: 17, maxClues: 17, seed: 42, maxAttempts: 2, deadline: Date.now() + 400
+    }));
+    eq(res.ok, false, '生成失敗として返すこと');
+    ok(res.reason === 'time' || res.reason === 'attempts', '失敗理由が time か attempts: ' + res.reason);
+    eq(typeof res.puzzle, 'undefined', '失敗時は問題データを返さない');
+  }, true);
+
+  /* ============================== 3. 論理ヒント ============================== */
+
+  test('ヒント：裸のシングル（固定盤面・候補も検証）', function () {
+    var b = B(FIX.nakedBoard);
+    var res = C.findLogicalHint(b);
+    eq(res.status, 'found', '一手が見つかること');
+    eq(res.technique, 'naked_single', '手法は裸のシングル');
+    eq(res.row, 1, '対象は2行目');
+    eq(res.col, 0, '対象は1列目');
+    eq(res.digit, 7, '確定数字は 7');
+    eq(res.candidates.join(','), '7', '対象マスの論理候補は [7]');
+    eq(res.units.length, 3, '根拠は行・列・ブロックの3つ');
+    ok(res.reason.indexOf('7') >= 0, '理由文に確定数字が含まれること');
+  });
+
+  test('ヒント：行の隠れたシングル（先に検出される手法が無いこと）', function () {
+    var b = B(FIX.hiddenRowBoard);
+    eq(scanNakedSingle(b), null, '裸のシングルが存在しないこと');
+    var res = C.findLogicalHint(b);
+    eq(res.technique, 'hidden_single_row', '手法は行の隠れたシングル');
+    eq(res.row, 1, '対象は2行目');
+    eq(res.col, 8, '対象は9列目');
+    eq(res.digit, 6, '確定数字は 6');
+    eq(res.units.length, 1, '根拠ユニットは 1 つ');
+    eq(res.units[0].type, 'row', '根拠は行');
+    eq(res.units[0].index, 1, '根拠は2行目');
+    var scan = scanHiddenSingle(b, 'row');
+    eq(scan.row, 1, '独立スキャンでも2行目');
+    eq(scan.col, 8, '独立スキャンでも9列目');
+    eq(scan.digit, 6, '独立スキャンでも 6');
+  });
+
+  test('ヒント：列の隠れたシングル（裸・行の隠れが無いこと）', function () {
+    var b = B(FIX.hiddenColBoard);
+    eq(scanNakedSingle(b), null, '裸のシングルが存在しないこと');
+    eq(scanHiddenSingle(b, 'row'), null, '行の隠れたシングルが存在しないこと');
+    var res = C.findLogicalHint(b);
+    eq(res.technique, 'hidden_single_col', '手法は列の隠れたシングル');
+    eq(res.row, 5, '対象は6行目');
+    eq(res.col, 6, '対象は7列目');
+    eq(res.digit, 2, '確定数字は 2');
+    eq(res.units[0].type, 'col', '根拠は列');
+    eq(res.units[0].index, 6, '根拠は7列目');
+  });
+
+  test('ヒント：ブロックの隠れたシングル（裸・行・列の隠れが無いこと）', function () {
+    var b = B(FIX.hiddenBoxBoard);
+    eq(scanNakedSingle(b), null, '裸のシングルが存在しないこと');
+    eq(scanHiddenSingle(b, 'row'), null, '行の隠れたシングルが存在しないこと');
+    eq(scanHiddenSingle(b, 'col'), null, '列の隠れたシングルが存在しないこと');
+    var res = C.findLogicalHint(b);
+    eq(res.technique, 'hidden_single_box', '手法はブロックの隠れたシングル');
+    eq(res.row, 7, '対象は8行目');
+    eq(res.col, 6, '対象は7列目');
+    eq(res.digit, 8, '確定数字は 8');
+    eq(res.units[0].type, 'box', '根拠はブロック');
+    eq(res.units[0].index, C.boxIndex(7, 6), '根拠ブロックが対象マスと一致');
+  });
+
+  test('ヒント：同じ盤面では同じ一手を選び、候補メモの影響を受けない', function () {
+    var b = B(FIX.hiddenColBoard);
+    var a1 = C.findLogicalHint(b);
+    var a2 = C.findLogicalHint(C.cloneBoard(b));
+    eq(a1.technique + a1.row + ',' + a1.col + a1.digit, a2.technique + a2.row + ',' + a2.col + a2.digit, '同じ結果が返ること');
+    // 候補メモは findLogicalHint の引数ではないため、メモの内容は結果に影響しない
+    var notes = C.createNotes();
+    notes[5][6] = [1, 9];
+    notes[0][0] = [2];
+    var a3 = C.findLogicalHint(b);
+    eq(a1.technique + a1.row + ',' + a1.col + a1.digit, a3.technique + a3.row + ',' + a3.col + a3.digit, 'メモを変更しても結果は不変');
+    // 引数は盤面のみ（正解盤面に依存しない）
+    eq(C.findLogicalHint.length, 1, 'findLogicalHint の引数は 1 つ（盤面のみ）');
+    ok(C.findLogicalHint.toString().indexOf('solution') === -1, '実装が正解盤面を参照していないこと');
+    var before = C.boardKey(b);
+    C.findLogicalHint(b);
+    eq(C.boardKey(b), before, 'ヒント探索は盤面を変更しない');
+  });
+
+  test('ヒント：候補0個の矛盾を検出し、一手を提示しない（別の場所に裸のシングルがあっても）', function () {
+    var b = B(FIX.contraCellBoard);
+    eq(C.findDuplicates(b).length, 0, '前提: 重複は無い');
+    eq(C.getCandidates(b, 0, 2).length, 0, '前提: 1行3列の候補は 0 個');
+    ok(scanNakedSingle(b) !== null, '前提: 別の場所に裸のシングルが存在する');
+    var res = C.findLogicalHint(b);
+    eq(res.status, 'contradiction', '矛盾として扱い、一手を提示しない');
+    eq(typeof res.digit, 'undefined', '確定数字は返さない');
+  });
+
+  test('ヒント：未配置数字の配置場所が0個の矛盾を検出する', function () {
+    var b = B(FIX.contraUnitBoard);
+    eq(C.findDuplicates(b).length, 0, '前提: 重複は無い');
+    var anyZero = false;
+    for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
+      if (b[r][c] === 0 && C.getCandidates(b, r, c).length === 0) anyZero = true;
+    }
+    eq(anyZero, false, '前提: 候補0個のマスは存在しない');
+    var res = C.findLogicalHint(b);
+    eq(res.status, 'contradiction', '矛盾として扱う');
+    ok(res.problems.some(function (p) { return p.kind === 'unit'; }), 'ユニット由来の矛盾が含まれること');
+  });
+
+  test('ヒント：形式不正（範囲外の値・サイズ違い）は invalid', function () {
+    var b = B(FIX.nakedBoard);
+    b[3][3] = 12;
+    eq(C.findLogicalHint(b).status, 'invalid', '範囲外の値は invalid');
+    var small = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    eq(C.findLogicalHint(small).status, 'invalid', '9x9 でない盤面は invalid');
+    var dup = B(FIX.duplicateBoard);
+    eq(C.findLogicalHint(dup).status, 'invalid', '重複がある盤面は invalid');
+  });
+
+  test('ヒント：対応手法で一手が見つからない場合は none（解なしと断定しない）', function () {
+    // 唯一解だが裸・隠れたシングルでは進めない盤面（初期配置を減らした盤面を利用）
+    var b = B('000000000000003085001020000000507000004000100090000000500000073002010000000040009');
+    var res = C.findLogicalHint(b);
+    ok(res.status === 'none' || res.status === 'found', 'none か found のいずれか（invalid や complete ではない）: ' + res.status);
+    if (res.status === 'none') ok(res.status !== 'complete', 'none を完成扱いしないこと');
+    eq(C.classifySolveResult(C.runSync(C.solveTask(b, { limit: 2 }))) === 'none' ? 'none' : 'ok', 'ok', '前提: この盤面は解が存在する（解なしではない）');
+  });
+
+  /* ============================== 4. 候補とインポート ============================== */
+
+  test('候補計算：初期配置とユーザー入力を反映し、昇順で返す', function () {
+    var b = C.createBoard();
+    b[0][0] = 9; b[0][1] = 8; b[1][0] = 7;      // 行・列・ブロックの制約
+    var cand = C.getCandidates(b, 1, 1);
+    ok(cand.indexOf(9) < 0 && cand.indexOf(8) < 0 && cand.indexOf(7) < 0, '既存数字は候補に含まれない');
+    var sorted = cand.slice().sort(function (x, y) { return x - y; });
+    eq(cand.join(','), sorted.join(','), '候補は昇順');
+    eq(C.getCandidates(b, 0, 0).length, 0, '数字が入っているマスの候補は空');
+    // ユーザー入力を 1 つ増やすと、同じ行の別マスの候補が減ること
+    var target = -1;
+    for (var c = 2; c < 9; c++) if (b[1][c] === 0) { target = c; break; }
+    var before = C.getCandidates(b, 1, target);
+    var d = before[0];
+    b[1][3] = d;                                  // 行にユーザー数字を追加
+    var after = C.getCandidates(b, 1, target);
+    eq(after.indexOf(d), -1, '追加した数字は他のマスの候補から除かれる');
+    ok(after.length < before.length, '候補数が減ること');
+  });
+
+  test('インポート：空白除去・. と 0・不正文字・文字数の検証', function () {
+    var src = FIX.nakedBoard;
+    var spaced = '';
+    for (var i = 0; i < 81; i++) {
+      spaced += (i % 9 === 0 ? '\n' : (i % 3 === 0 ? ' ' : '')) + (i === 40 ? '.' : src.charAt(i));
+    }
+    var res = C.normalizeImport(spaced);
+    eq(res.ok, true, '空白・改行を含む入力を受け付ける');
+    var expected = B(src);
+    expected[4][4] = 0;
+    eqBoard(res.board, expected, '. は空欄として扱う');
+    eq(res.board[0][0], 8, '左上から行順に反映される');
+
+    eq(C.normalizeImport(src.replace('0', 'x')).ok, false, '不正な文字は受け付けない');
+    eq(C.normalizeImport(src.slice(0, 80)).ok, false, '80 文字は受け付けない');
+    eq(C.normalizeImport('').ok, false, '空入力は受け付けない');
+    var zeros = new Array(82).join('0');
+    var allEmpty = C.normalizeImport(zeros);
+    eq(allEmpty.ok, true, '0 だけの 81 文字は受け付ける');
+    eq(C.boardKey(allEmpty.board), zeros, 'すべて空欄として読み込む');
+    eq(allEmpty.duplicates.length, 0, '空欄だけなら重複なし');
+  });
+
+  /* ============================== 実行 ============================== */
+
+  function runOne(index) {
+    var t = tests[index];
+    var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    var out = { index: index, name: t.name, pass: true, detail: '', slow: t.slow, ms: 0 };
+    try {
+      t.fn();
+    } catch (e) {
+      out.pass = false;
+      out.detail = String(e && e.message ? e.message : e);
+    }
+    var t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    out.ms = Math.round(t1 - t0);
+    return out;
+  }
+
+  function run() {
+    var results = [];
+    for (var i = 0; i < tests.length; i++) results.push(runOne(i));
+    var passed = results.filter(function (r) { return r.pass; }).length;
+    return {
+      results: results, total: results.length, passed: passed, failed: results.length - passed,
+      ms: results.reduce(function (a, r) { return a + r.ms; }, 0)
+    };
+  }
+
+  return {
+    list: function () { return tests.map(function (t) { return { name: t.name, slow: t.slow }; }); },
+    count: function () { return tests.length; },
+    runOne: runOne,
+    run: run,
+    fixtures: FIX
+  };
+})();
+</script>
+<script id="sudoku-ui">
+/* =============================================================================
+ * SudokuApp UI — 状態管理 / 描画 / 入力 / ヒント / 解析 / 保存 を担当する層
+ * -----------------------------------------------------------------------------
+ * 役割の分離:
+ *   SudokuCore … 数独の計算（純粋関数・ジェネレータ。DOM を知らない）
+ *   このファイル … 状態（プレイ／入力解析を別々に保持）、DOM 描画、イベント、
+ *                  重い処理の駆動（Web Worker またはイベントループ分割）、保存
+ * 重い処理は必ず識別子（app.opToken / app.verifyToken / taskId）で
+ * 「古い結果を適用しない」ようにしている。
+ * ===========================================================================*/
+(function () {
+  'use strict';
+  var C = SudokuCore;
+
+  /* ------------------------------------------------------------------ 定数 */
+  var SAVE_KEY = 'sudoku-app-state';
+  var SAVE_VERSION = 2;
+  // Undo/Redo 履歴の上限。超えた場合は古い方（先頭）から破棄する。
+  var HISTORY_LIMIT = 200;
+  var GENERATE_TIME_LIMIT = 30000;   // 生成の制限時間(ms)
+  var GENERATE_MAX_ATTEMPTS = 400;   // 生成の試行回数上限
+  var SOLVE_TIME_LIMIT = 20000;      // 解析・検証の制限時間(ms)
+  var AUTOSAVE_TICKS = 10;           // タイマー何回ごとに自動保存するか（1回=1秒）
+  var NOTICE_HIDE_MS = 9000;
+  var DIFFICULTIES = {
+    easy: { key: 'easy', label: 'やさしい', minClues: 40, maxClues: 46 },
+    normal: { key: 'normal', label: 'ふつう', minClues: 32, maxClues: 39 },
+    hard: { key: 'hard', label: 'むずかしい', minClues: 26, maxClues: 31 }
+  };
+
+  /* --------------------------------------------------------------- DOM 参照 */
+  var el = {};
+  function $(id) { return document.getElementById(id); }
+  function cacheDom() {
+    ['board', 'status', 'notice', 'tab-play', 'tab-analysis', 'panel-play', 'panel-analysis',
+      'difficulty', 'btn-new', 'btn-reset', 'stat-id', 'stat-difficulty', 'stat-timer', 'stat-hints',
+      'btn-check', 'btn-hint', 'btn-solve', 'import-text', 'btn-import', 'btn-analyze',
+      'btn-analysis-solve', 'btn-clear-board', 'analysis-result', 'hint-text', 'btn-apply-hint',
+      'btn-close-hint', 'pad', 'btn-erase', 'btn-note', 'btn-clear-notes', 'btn-undo', 'btn-redo',
+      'input-mode-indicator', 'busy-panel', 'busy-text', 'btn-cancel', 'completion-panel',
+      'completion-text', 'btn-run-tests', 'test-summary', 'test-results',
+      'confirm-dialog', 'confirm-text', 'confirm-ok', 'confirm-cancel', 'main'].forEach(function (id) {
+        el[id] = $(id);
+      });
+  }
+
+  var cellEls = [], valueEls = [], noteEls = [], padBtns = {};
+
+  /* ----------------------------------------------------------------- 状態 */
+  var app = {
+    mode: 'play',        // 'play' | 'analysis'
+    busy: false,
+    opToken: 0,          // 生成・解析など「現在の操作」の識別子
+    verifyToken: 0,      // 保存データ検証の識別子
+    storageOk: true,
+    storageWarned: false,
+    lastNotice: '',
+    noticeTimer: null,
+    migrationNotice: '',
+    tickCount: 0
+  };
+
+  function newPlayState() {
+    return {
+      puzzleId: null, difficulty: 'easy',
+      initialBoard: null, userBoard: null, solutionBoard: null, notes: C.createNotes(),
+      selected: { r: 0, c: 0 }, inputMode: 'digit',
+      elapsedMs: 0, hintCount: 0, revealedHintKeys: {}, autoSolved: false,
+      checkActive: false, checkWrong: {}, completed: false, hint: null,
+      solutionVerified: false, undo: [], redo: []
+    };
+  }
+  function newAnalysisState() {
+    return {
+      board: C.createBoard(), notes: C.createNotes(), selected: { r: 0, c: 0 },
+      inputMode: 'digit', undo: [], redo: [], result: null
+    };
+  }
+  var play = newPlayState();
+  var analysis = newAnalysisState();
+
+  var timer = { running: false, startTs: 0, intervalId: null };
+
+  function current() { return app.mode === 'play' ? play : analysis; }
+  function compositeBoard() {
+    var b = C.createBoard();
+    if (!play.initialBoard) return b;                       // 問題が未生成のときは空盤面を返す
+    for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
+      b[r][c] = play.initialBoard[r][c] !== 0 ? play.initialBoard[r][c] : play.userBoard[r][c];
+    }
+    return b;
+  }
+  function boardOf(st) { return st === play ? compositeBoard() : analysis.board; }
+
+  /* ----------------------------------------------------- 履歴（Undo/Redo） */
+  function snapshotOf(st) {
+    return st === play
+      ? { user: C.cloneBoard(play.userBoard), notes: C.cloneNotes(play.notes) }
+      : { board: C.cloneBoard(analysis.board), notes: C.cloneNotes(analysis.notes) };
+  }
+  function restoreSnapshot(st, snap) {
+    if (st === play) { play.userBoard = C.cloneBoard(snap.user); play.notes = C.cloneNotes(snap.notes); }
+    else { analysis.board = C.cloneBoard(snap.board); analysis.notes = C.cloneNotes(snap.notes); }
+  }
+  function sameNotes(a, b) {
+    for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
+      var x = a[r][c] || [], y = b[r][c] || [];
+      if (x.length !== y.length) return false;
+      for (var i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+    }
+    return true;
+  }
+  function sameSnapshot(st, snap) {
+    return st === play
+      ? C.sameBoard(play.userBoard, snap.user) && sameNotes(play.notes, snap.notes)
+      : C.sameBoard(analysis.board, snap.board) && sameNotes(analysis.notes, snap.notes);
+  }
+  /** 変化があるときだけ 1 操作として履歴に積む（同じ状態への再入力では積まない）。 */
+  function pushHistory(st, snap) {
+    if (sameSnapshot(st, snap)) return false;
+    st.undo.push(snap);
+    if (st.undo.length > HISTORY_LIMIT) st.undo.shift();   // 上限超過は古い方から破棄
+    st.redo.length = 0;                                    // 新しい編集で Redo 履歴を破棄
+    return true;
+  }
+  function doUndo() {
+    var st = current();
+    if (app.busy || st.undo.length === 0) return;
+    var cur = snapshotOf(st);
+    var prev = st.undo.pop();
+    st.redo.push(cur);
+    if (st.redo.length > HISTORY_LIMIT) st.redo.shift();
+    restoreSnapshot(st, prev);
+    clearHint('Undo したため、表示していたヒントを解除しました。', true);
+    afterEdit(st, 'Undo しました。');
+  }
+  function doRedo() {
+    var st = current();
+    if (app.busy || st.redo.length === 0) return;
+    var cur = snapshotOf(st);
+    var next = st.redo.pop();
+    st.undo.push(cur);
+    if (st.undo.length > HISTORY_LIMIT) st.undo.shift();
+    restoreSnapshot(st, next);
+    clearHint('Redo したため、表示していたヒントを解除しました。', true);
+    afterEdit(st, 'Redo しました。');
+  }
+
+  /* ------------------------------------------------------------ 状態通知 */
+  function setStatus(msg) { el.status.textContent = msg || ''; }
+  /** 重要度の高い通知（role="alert"）。同じ内容を繰り返し出し続けない。 */
+  function notify(msg) {
+    if (app.lastNotice === msg && !el.notice.hidden) return;
+    app.lastNotice = msg;
+    el.notice.textContent = msg;
+    el.notice.hidden = false;
+    if (app.noticeTimer) clearTimeout(app.noticeTimer);
+    app.noticeTimer = setTimeout(function () { el.notice.hidden = true; }, NOTICE_HIDE_MS);
+  }
+
+  /* ------------------------------------------------------ 重い処理の駆動 */
+  var worker = null, workerBroken = false, heavySeq = 0, heavyCurrent = null;
+
+  function notifyWorkerFallback() {
+    notify('この環境では Web Worker を利用できないため、処理を小さく分割して実行します（画面の応答性は保たれますが、少し時間がかかることがあります）。');
+  }
+  function getWorker() {
+    if (worker) return worker;
+    if (workerBroken) return null;
+    if (typeof Worker === 'undefined' || typeof Blob === 'undefined' ||
+      typeof URL === 'undefined' || !URL.createObjectURL) {
+      workerBroken = true; notifyWorkerFallback(); return null;
+    }
+    try {
+      var src = $('sudoku-core').textContent;
+      var url = URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
+      worker = new Worker(url);
+      worker.onerror = function () {
+        workerBroken = true;
+        try { worker.terminate(); } catch (e) { }
+        worker = null;
+        notifyWorkerFallback();
+        if (heavyCurrent && heavyCurrent.resolve) heavyCurrent.resolve({ cancelled: true, workerError: true });
+      };
+      return worker;
+    } catch (e) {
+      workerBroken = true; notifyWorkerFallback(); return null;
+    }
+  }
+  /** ジェネレータを少しずつ進め、12ms ごとにイベントループへ制御を返す（Worker 不可時の代替）。 */
+  function driveAsync(gen, ctx) {
+    return new Promise(function (resolve, reject) {
+      var now = function () {
+        return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      };
+      function step() {
+        if (ctx.cancelled) { resolve({ cancelled: true }); return; }
+        var t0 = now();
+        try {
+          var r = gen.next();
+          while (!r.done && (now() - t0) < 12) r = gen.next();
+          if (r.done) resolve(r.value);
+          else setTimeout(step, 0);
+        } catch (e) { reject(e); }
+      }
+      setTimeout(step, 0);
+    });
+  }
+  function withStop(params, ctx) {
+    var p = {};
+    for (var k in params) if (Object.prototype.hasOwnProperty.call(params, k)) p[k] = params[k];
+    p.shouldStop = function () { return ctx.cancelled; };
+    return p;
+  }
+  /**
+   * 重い処理を実行する。Worker があれば Worker、無ければメインスレッド分割実行。
+   * 戻り値は処理結果、または { cancelled:true }。
+   */
+  function heavyRun(kind, params) {
+    var id = ++heavySeq;
+    return new Promise(function (resolve, reject) {
+      var ctx = { id: id, cancelled: false, resolve: resolve, reject: reject };
+      heavyCurrent = ctx;
+      var w = getWorker();
+      if (w) {
+        var handler = function (e) {
+          var m = e.data;
+          if (!m || m.taskId !== id) return;                 // 古い結果は無視
+          w.removeEventListener('message', handler);
+          if (heavyCurrent === ctx) heavyCurrent = null;
+          if (ctx.cancelled) { resolve({ cancelled: true }); return; }
+          if (m.ok) resolve(m.payload);
+          else reject(new Error(m.message || 'Worker 内でエラーが発生しました。'));
+        };
+        w.addEventListener('message', handler);
+        ctx.worker = w; ctx.handler = handler;
+        try {
+          w.postMessage({ type: 'run', taskId: id, kind: kind, params: params });
+        } catch (e) {
+          w.removeEventListener('message', handler);
+          workerBroken = true;
+          try { w.terminate(); } catch (e2) { }
+          worker = null;
+          notifyWorkerFallback();
+          var gen = kind === 'generate' ? C.generateTask(withStop(params, ctx)) : C.solveTask(params.board, withStop(params, ctx));
+          driveAsync(gen, ctx).then(resolve, reject);
+        }
+      } else {
+        var gen2 = kind === 'generate'
+          ? C.generateTask(withStop(params, ctx))
+          : C.solveTask(params.board, withStop(params, ctx));
+        driveAsync(gen2, ctx).then(resolve, reject);
+      }
+    });
+  }
+  /** 進行中の重い処理をキャンセルする（Worker は terminate して確実に止める）。 */
+  function cancelHeavy() {
+    var ctx = heavyCurrent;
+    if (!ctx) return false;
+    ctx.cancelled = true;
+    heavyCurrent = null;
+    if (ctx.worker) {
+      if (ctx.handler) { try { ctx.worker.removeEventListener('message', ctx.handler); } catch (e) { } }
+      try { ctx.worker.terminate(); } catch (e) { }
+      worker = null;                                          // 次回は作り直す
+    }
+    app.opToken++;                                            // 進行中だった結果を無効化
+    if (ctx.resolve) ctx.resolve({ cancelled: true });
+    return true;
+  }
+
+  /* ------------------------------------------------------------ 処理中表示 */
+  function setBusy(busy, message) {
+    app.busy = !!busy;
+    el['busy-panel'].hidden = !busy;
+    el.main.setAttribute('aria-busy', busy ? 'true' : 'false');
+    if (busy) el['busy-text'].textContent = message || '処理しています…';
+    updateControls();
+    updateTimerState();
+  }
+
+  /* -------------------------------------------------------------- タイマー */
+  function currentElapsed() {
+    return play.elapsedMs + (timer.running ? Date.now() - timer.startTs : 0);
+  }
+  function fmtTime(ms) {
+    var s = Math.max(0, Math.floor(ms / 1000));
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    return (h > 0 ? h + ':' : '') + pad(m) + ':' + pad(sec);
+  }
+  function updateTimerDisplay() { el['stat-timer'].textContent = fmtTime(currentElapsed()); }
+  /** 計測条件: プレイモード表示中・ページ可視・未完成・重い処理中でないこと。 */
+  function updateTimerState() {
+    var should = app.mode === 'play' && !!play.puzzleId && !play.completed &&
+      !document.hidden && !app.busy;
+    if (should && !timer.running) { timer.running = true; timer.startTs = Date.now(); }
+    else if (!should && timer.running) { play.elapsedMs = currentElapsed(); timer.running = false; timer.startTs = 0; }
+    updateTimerDisplay();
+  }
+  function startTicker() {
+    if (timer.intervalId) return;                             // 多重起動の防止
+    timer.intervalId = setInterval(function () {
+      if (timer.running) updateTimerDisplay();
+      app.tickCount++;
+      if (app.tickCount % AUTOSAVE_TICKS === 0) save();        // タイマー中も定期的に保存
+    }, 1000);
+  }
+
+  /* -------------------------------------------------------------- 描画 */
+  function buildBoard() {
+    el.board.innerHTML = '';
+    cellEls = []; valueEls = []; noteEls = [];
+    for (var r = 0; r < 9; r++) {
+      var rowEl = document.createElement('div');
+      rowEl.className = 'board-row';
+      rowEl.setAttribute('role', 'row');
+      rowEl.setAttribute('data-r', r);
+      for (var c = 0; c < 9; c++) {
+        var cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.setAttribute('role', 'gridcell');
+        cell.setAttribute('data-r', r);
+        cell.setAttribute('data-c', c);
+        cell.setAttribute('aria-rowindex', r + 1);
+        cell.setAttribute('aria-colindex', c + 1);
+        cell.setAttribute('tabindex', '-1');
+        var value = document.createElement('span');
+        value.className = 'value';
+        var notes = document.createElement('span');
+        notes.className = 'notes';
+        notes.setAttribute('aria-hidden', 'true');             // 候補は aria-label で読み上げる
+        for (var d = 1; d <= 9; d++) {
+          var s = document.createElement('span');
+          s.setAttribute('data-d', d);
+          notes.appendChild(s);
+        }
+        cell.appendChild(value);
+        cell.appendChild(notes);
+        rowEl.appendChild(cell);
+        cellEls[r * 9 + c] = cell;
+        valueEls[r * 9 + c] = value;
+        noteEls[r * 9 + c] = notes.children;
+      }
+      el.board.appendChild(rowEl);
+    }
+    updateBoardMetrics();
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(updateBoardMetrics).observe(el.board);
+    } else {
+      window.addEventListener('resize', updateBoardMetrics);
+    }
+  }
+  /** マスの大きさに合わせて数字と候補の文字サイズを決める（スマホでも収まる）。 */
+  function updateBoardMetrics() {
+    var w = el.board.clientWidth;
+    if (!w) return;
+    var cell = w / 9;
+    el.board.style.setProperty('--value-font', Math.max(11, Math.round(cell * 0.56)) + 'px');
+    el.board.style.setProperty('--note-font', Math.max(7, Math.round(cell * 0.24)) + 'px');
+  }
+  function buildPad() {
+    el.pad.innerHTML = '';
+    for (var d = 1; d <= 9; d++) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.setAttribute('data-digit', d);
+      b.setAttribute('aria-keyshortcuts', String(d));
+      b.textContent = String(d);
+      el.pad.appendChild(b);
+      padBtns[d] = b;
+    }
+    var erase = document.createElement('button');
+    erase.type = 'button';
+    erase.setAttribute('data-erase', '1');
+    erase.textContent = '消去';
+    el.pad.appendChild(erase);
+    padBtns.erase = erase;
+  }
+
+  function renderBoard() {
+    var st = current();
+    var board = boardOf(st);
+    var dupMap = {};
+    C.findDuplicates(board).forEach(function (i) { dupMap[i] = true; });
+    var wrongMap = {};
+    if (app.mode === 'play' && play.checkActive && play.solutionBoard) {
+      for (var i0 = 0; i0 < 81; i0++) {
+        var r0 = (i0 / 9) | 0, c0 = i0 % 9, v0 = board[r0][c0];
+        if (v0 !== 0 && v0 !== play.solutionBoard[r0][c0]) wrongMap[i0] = true;
+      }
+    }
+    var sel = st.selected, selIdx = sel.r * 9 + sel.c, selVal = board[sel.r][sel.c];
+    var hint = (app.mode === 'play') ? play.hint : null;
+    var hintUnitMap = {};
+    if (hint && hint.units) {
+      hint.units.forEach(function (u) {
+        C.unitCells(u.type, u.index).forEach(function (rc) { hintUnitMap[rc[0] * 9 + rc[1]] = true; });
+      });
+    }
+    for (var i = 0; i < 81; i++) {
+      var r = (i / 9) | 0, c = i % 9, v = board[r][c];
+      var isInitial = (app.mode === 'play' && !!play.initialBoard && play.initialBoard[r][c] !== 0);
+      var notes = (st.notes[r][c] || []);
+      var cls = 'cell';
+      if (isInitial) cls += ' initial'; else if (v !== 0) cls += ' user';
+      if (i === selIdx) cls += ' selected';
+      else if (r === sel.r || c === sel.c || C.boxIndex(r, c) === C.boxIndex(sel.r, sel.c)) cls += ' related';
+      if (selVal !== 0 && v === selVal && i !== selIdx) cls += ' same-digit';
+      if (dupMap[i]) cls += ' dup';
+      if (wrongMap[i]) cls += ' wrong';
+      if (hint && hint.row === r && hint.col === c) cls += ' hint-target';
+      else if (hintUnitMap[i]) cls += ' hint-unit';
+      var cell = cellEls[i];
+      if (cell.className !== cls) cell.className = cls;
+      var text = v ? String(v) : '';
+      if (valueEls[i].textContent !== text) valueEls[i].textContent = text;
+      for (var d = 1; d <= 9; d++) {
+        var nt = (v === 0 && notes.indexOf(d) >= 0) ? String(d) : '';
+        if (noteEls[i][d - 1].textContent !== nt) noteEls[i][d - 1].textContent = nt;
+      }
+      // マスの読み上げ用ラベル（行・列・数字・候補・編集可否・選択・エラー・ヒント対象）
+      var parts = [(r + 1) + '行' + (c + 1) + '列'];
+      if (v) { parts.push('数字' + v); parts.push(isInitial ? '初期配置' : '入力値'); }
+      else { parts.push('空欄'); parts.push('編集可能'); }
+      if (!v && notes.length) parts.push('候補 ' + notes.join(' '));
+      if (i === selIdx) parts.push('選択中');
+      if (dupMap[i]) parts.push('重複');
+      if (wrongMap[i]) parts.push('正解と不一致');
+      if (hint && hint.row === r && hint.col === c) parts.push('次の一手の対象');
+      cell.setAttribute('aria-label', parts.join('、'));
+      cell.setAttribute('aria-selected', i === selIdx ? 'true' : 'false');
+      cell.setAttribute('aria-readonly', isInitial ? 'true' : 'false');
+      var ti = (i === selIdx) ? '0' : '-1';
+      if (cell.getAttribute('tabindex') !== ti) cell.setAttribute('tabindex', ti);
+    }
+  }
+
+  function renderHint() {
+    var h = (app.mode === 'play') ? play.hint : null;
+    if (!h) {
+      el['hint-text'].textContent = '「次の一手」を押すと、いまの盤面から論理的に確定できる一手と、その理由を表示します。';
+      el['btn-apply-hint'].disabled = true;
+      el['btn-close-hint'].disabled = true;
+      return;
+    }
+    var lines = [];
+    lines.push('次の一手：' + (h.row + 1) + '行' + (h.col + 1) + '列に「' + h.digit + '」');
+    lines.push('手法：' + h.techniqueName);
+    lines.push('理由：' + h.reason);
+    lines.push('このマスの論理候補：' + (h.candidates.length ? h.candidates.join('、') : '（なし）'));
+    lines.push('根拠：' + h.units.map(function (u) { return u.label; }).join('、'));
+    el['hint-text'].textContent = lines.join('\n');
+    el['btn-apply-hint'].disabled = app.busy;
+    el['btn-close-hint'].disabled = app.busy;
+  }
+
+  function renderPlayInfo() {
+    el['stat-id'].textContent = play.puzzleId || '—';
+    el['stat-difficulty'].textContent = play.puzzleId && DIFFICULTIES[play.difficulty]
+      ? DIFFICULTIES[play.difficulty].label : '—';
+    el['stat-hints'].textContent = play.hintCount + ' 回';
+    updateTimerDisplay();
+    el['btn-check'].setAttribute('aria-pressed', play.checkActive ? 'true' : 'false');
+    el['btn-check'].textContent = play.checkActive ? 'チェック表示を解除' : '正解チェック';
+  }
+
+  function renderAnalysis() {
+    var r = analysis.result;
+    if (!r) {
+      el['analysis-result'].textContent = '解析結果はまだありません。「解析」を押すと、解の有無と唯一解かどうかを調べます。';
+      return;
+    }
+    var labels = {
+      unique: '唯一解', multiple: '複数解あり', none: '解なし',
+      limited: '探索制限により判定不能', cancelled: 'キャンセル',
+      format_error: '入力形式エラー', duplicate: '重複あり', error: 'エラー'
+    };
+    var text = '解析結果：' + (labels[r.status] || r.status) + '\n' + r.message;
+    if (C.boardKey(analysis.board) !== r.boardKey) {
+      text += '\n※ 解析後に入力盤面が変更されたため、この結果は適用できません。もう一度「解析」を実行してください。';
+    }
+    el['analysis-result'].textContent = text;
+  }
+
+  function renderInputMode() {
+    var st = current();
+    var note = st.inputMode === 'note';
+    el['btn-note'].setAttribute('aria-pressed', note ? 'true' : 'false');
+    el['input-mode-indicator'].setAttribute('data-mode', note ? 'note' : 'digit');
+    el['input-mode-indicator'].textContent = note
+      ? '入力モード：候補メモ（数字を押すと候補の追加／削除を切り替えます）'
+      : '入力モード：数字（数字を押すと確定数字を入力します）';
+    for (var d = 1; d <= 9; d++) {
+      padBtns[d].setAttribute('aria-label', note ? '候補 ' + d + ' を切り替える' : '数字 ' + d + ' を入力する');
+    }
+    padBtns.erase.setAttribute('aria-label', note ? '選択マスの候補をすべて消去する' : '選択マスの数字を消去する');
+  }
+
+  function updateTabs() {
+    var isPlay = app.mode === 'play';
+    el['tab-play'].setAttribute('aria-selected', isPlay ? 'true' : 'false');
+    el['tab-analysis'].setAttribute('aria-selected', isPlay ? 'false' : 'true');
+    el['tab-play'].setAttribute('tabindex', isPlay ? '0' : '-1');
+    el['tab-analysis'].setAttribute('tabindex', isPlay ? '-1' : '0');
+    el['panel-play'].hidden = !isPlay;
+    el['panel-analysis'].hidden = isPlay;
+  }
+
+  function updateControls() {
+    var inPlay = app.mode === 'play';
+    var hasPuzzle = !!play.puzzleId;
+    var ready = hasPuzzle && play.solutionVerified;     // 検証済みの問題だけ正解依存機能を許可
+    var st = current();
+    var busy = app.busy;
+    el['btn-new'].disabled = busy;
+    el['difficulty'].disabled = busy;
+    el['btn-reset'].disabled = busy || !hasPuzzle || !inPlay;
+    el['btn-check'].disabled = busy || !ready || !inPlay;
+    el['btn-hint'].disabled = busy || !ready || !inPlay;
+    el['btn-solve'].disabled = busy || !ready || !inPlay;
+    el['btn-apply-hint'].disabled = busy || !(play.hint && inPlay);
+    el['btn-close-hint'].disabled = busy || !(play.hint && inPlay);
+    el['btn-undo'].disabled = busy || st.undo.length === 0;
+    el['btn-redo'].disabled = busy || st.redo.length === 0;
+    el['btn-import'].disabled = busy;
+    el['btn-analyze'].disabled = busy;
+    el['btn-analysis-solve'].disabled = busy || !analysis.result || inPlay;
+    el['btn-clear-board'].disabled = busy;
+    el['btn-erase'].disabled = busy;
+    el['btn-note'].disabled = busy;
+    el['btn-clear-notes'].disabled = busy;
+    for (var d = 1; d <= 9; d++) padBtns[d].disabled = busy;
+    padBtns.erase.disabled = busy;
+  }
+
+  function renderAll() {
+    renderBoard();
+    renderHint();
+    renderPlayInfo();
+    renderAnalysis();
+    renderInputMode();
+    updateTabs();
+    updateControls();
+  }
+
+  /* ---------------------------------------------------------- 選択と入力 */
+  function isEditable(st, r, c) {
+    if (app.mode === 'play') return !!(play.initialBoard && play.initialBoard[r][c] === 0);
+    return true;
+  }
+  function selectCell(r, c, focus) {
+    if (r < 0 || r > 8 || c < 0 || c > 8) return;
+    var st = current();
+    st.selected = { r: r, c: c };
+    renderBoard();
+    updateControls();
+    if (focus) {
+      var cell = cellEls[r * 9 + c];
+      if (cell && document.activeElement !== cell) cell.focus({ preventScroll: true });
+    }
+  }
+  function moveSelection(dr, dc) {
+    var st = current();
+    var r = Math.min(8, Math.max(0, st.selected.r + dr));
+    var c = Math.min(8, Math.max(0, st.selected.c + dc));
+    selectCell(r, c, true);
+  }
+  function setDigit(st, r, c, v) {
+    if (st === play) play.userBoard[r][c] = v; else analysis.board[r][c] = v;
+  }
+  function afterEdit(st, message) {
+    // ヒントは「数字盤面が変わったとき」だけ解除する（候補メモだけの変更では保持）
+    if (app.mode === 'play' && play.hint) {
+      var changed = C.boardKey(compositeBoard()) !== play.hint.boardKey;
+      if (changed) clearHint('盤面が変わったため、表示していたヒントを解除しました。', true);
+    }
+    updateDerived();
+    renderAll();
+    updateTimerState();
+    save();
+    if (message) setStatus(message);
+  }
+  /** 派生状態（重複・完成・チェック表示・解析結果の有効性）を盤面から再計算する。 */
+  function updateDerived() {
+    if (app.mode === 'play') {
+      if (!play.puzzleId) return;
+      var b = compositeBoard();
+      var done = C.isCompleteValid(b) && play.solutionBoard && C.sameBoard(b, play.solutionBoard);
+      if (done && !play.completed) { play.completed = true; onCompleted(); }
+      else if (!done && play.completed) { play.completed = false; clearCompletion(); }
+      if (play.checkActive) {
+        var wrong = 0;
+        for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
+          var v = b[r][c];
+          if (v !== 0 && v !== play.solutionBoard[r][c]) wrong++;
+        }
+        var dupCount = C.findDuplicates(b).length;
+        var msg = wrong === 0
+          ? '正解チェック：入力済みの数字はすべて正解です（空欄は判定していません）。'
+          : '正解チェック：正解と異なるマスが ' + wrong + ' 個あります（正解の数字は表示しません）。';
+        if (dupCount) msg += ' なお、重複しているマスが ' + dupCount + ' 個あります。';
+        setStatus(msg);
+      } else {
+        var dups = C.findDuplicates(b).length;
+        if (dups) setStatus('重複しているマスが ' + dups + ' 個あります（同じ行・列・ブロックに同じ数字）。初期配置も含めて表示しています。');
+      }
+    } else {
+      var d2 = C.findDuplicates(analysis.board).length;
+      if (d2) setStatus('重複しているマスが ' + d2 + ' 個あります。解析は形式と重複を確認してから実行してください。');
+      renderAnalysis();
+    }
+  }
+  function onCompleted() {
+    updateTimerState();                                       // 完成でタイマー停止
+    var diffLabel = DIFFICULTIES[play.difficulty] ? DIFFICULTIES[play.difficulty].label : '—';
+    var how = play.autoSolved
+      ? '自動解答を使用しての完成です（自動解答あり）'
+      : (play.hintCount > 0 ? 'ヒントを使用しての完成です（ヒント ' + play.hintCount + ' 回）' : '補助機能を使わないクリアです');
+    var text = '完成しました。\n難易度：' + diffLabel + '　経過時間：' + fmtTime(currentElapsed()) +
+      '\nヒント使用：' + play.hintCount + ' 回　自動解答：' + (play.autoSolved ? '使用' : '未使用') + '\n' + how;
+    el['completion-text'].textContent = text;
+    el['completion-panel'].hidden = false;
+    setStatus('完成しました！ 経過時間 ' + fmtTime(currentElapsed()) + '、ヒント ' + play.hintCount + ' 回、' + (play.autoSolved ? '自動解答あり' : '自動解答なし') + '。');
+  }
+  function clearCompletion() {
+    el['completion-panel'].hidden = true;
+    el['completion-text'].textContent = '';
+  }
+
+  /** 数字ボタン／キーボードからの入力。 */
+  function inputDigit(d) {
+    if (app.busy) return;
+    var st = current(), r = st.selected.r, c = st.selected.c;
+    if (!isEditable(st, r, c)) {
+      setStatus('初期配置の数字は変更できません（消去もできません）。');
+      return;
+    }
+    var board = boardOf(st);
+    if (st.inputMode === 'note') {
+      if (board[r][c] !== 0) { setStatus('数字が入っているマスには候補メモを入力できません。数字を消去するか、Undo で戻してください。'); return; }
+      var snap = snapshotOf(st);
+      var list = st.notes[r][c];
+      var idx = list.indexOf(d);
+      if (idx >= 0) list.splice(idx, 1); else { list.push(d); list.sort(function (a, b) { return a - b; }); }
+      if (pushHistory(st, snap)) afterEdit(st, idx >= 0 ? '候補メモから ' + d + ' を削除しました。' : '候補メモに ' + d + ' を追加しました。');
+      else renderAll();
+    } else {
+      if (board[r][c] === d) { renderAll(); return; }         // 同じ状態への再入力では履歴を増やさない
+      var snap2 = snapshotOf(st);
+      setDigit(st, r, c, d);
+      st.notes[r][c] = [];                                    // 確定数字を入れたら候補メモは削除（1 操作）
+      if (pushHistory(st, snap2)) {
+        var dupNow = C.findDuplicates(boardOf(st)).length;
+        afterEdit(st, dupNow
+          ? (r + 1) + '行' + (c + 1) + '列に ' + d + ' を入力しました。重複があるため、重複マスを確認してください。'
+          : (r + 1) + '行' + (c + 1) + '列に ' + d + ' を入力しました。');
+      } else renderAll();
+    }
+  }
+  /** 消去（通常入力モードでは数字、候補メモ入力モードでは候補を消す）。 */
+  function eraseSelected() {
+    if (app.busy) return;
+    var st = current(), r = st.selected.r, c = st.selected.c;
+    if (!isEditable(st, r, c)) { setStatus('初期配置の数字は消去できません。'); return; }
+    var snap = snapshotOf(st);
+    if (st.inputMode === 'note') st.notes[r][c] = [];
+    else setDigit(st, r, c, 0);                               // 数字の消去では以前の候補は復元しない
+    if (pushHistory(st, snap)) afterEdit(st, '選択マスを消去しました。以前の候補メモは Undo で戻せます。');
+    else renderAll();
+  }
+  function clearSelectedNotes() {
+    if (app.busy) return;
+    var st = current(), r = st.selected.r, c = st.selected.c;
+    var snap = snapshotOf(st);
+    st.notes[r][c] = [];
+    if (pushHistory(st, snap)) afterEdit(st, '選択マスの候補メモをすべて消去しました。');
+    else renderAll();
+  }
+  function toggleInputMode() {
+    var st = current();
+    st.inputMode = st.inputMode === 'note' ? 'digit' : 'note';
+    renderInputMode();
+    updateControls();
+    save();
+    setStatus(st.inputMode === 'note'
+      ? '候補メモ入力モードに切り替えました。'
+      : '数字入力モードに切り替えました。');
+  }
+
+  /* ------------------------------------------------------------ ヒント */
+  function clearHint(message, quiet) {
+    var had = (app.mode === 'play' && play.hint) || (app.mode === 'analysis' && false);
+    play.hint = null;
+    renderHint();
+    renderBoard();
+    updateControls();
+    if (message && !quiet) setStatus(message);
+    if (message && quiet) setStatus(message);
+    return had;
+  }
+  function hintKey(h) {
+    // 問題識別子・数字盤面・対象マス・数字・手法から作る（候補メモ・選択・経過時間は含めない）
+    return play.puzzleId + '|' + h.boardKey + '|' + h.row + ',' + h.col + '|' + h.digit + '|' + h.technique;
+  }
+  function requestHint() {
+    if (app.busy) { setStatus('処理中です。完了するかキャンセルしてからお試しください。'); return; }
+    if (app.mode !== 'play') { setStatus('「次の一手」はプレイモードでのみ使用できます。'); return; }
+    if (!play.puzzleId) { setStatus('問題がありません。「新しい問題」で生成してください。'); return; }
+    if (!play.solutionVerified) {
+      setStatus('正解データを検証中です（またはデータに問題があります）。検証が終わるまで「次の一手」は使用できません。');
+      return;
+    }
+    var board = compositeBoard();
+    // 1) 形式の検証
+    if (!C.isValidBoardShape(board)) { notify('盤面データの形式が不正です。データの再検証が必要です。'); return; }
+    // 2) 重複の確認
+    if (C.hasDuplicates(board)) {
+      setStatus('重複エラーを修正してから、次の一手を利用してください。');
+      clearHint(null, true);
+      return;
+    }
+    // 3) 正解との照合（この安全確認のためだけに solutionBoard を参照する）
+    var mismatch = 0;
+    for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
+      var v = board[r][c];
+      if (v !== 0 && v !== play.solutionBoard[r][c]) mismatch++;
+    }
+    if (mismatch > 0) {
+      setStatus('現在の入力に誤りがあります。正解チェックで確認してから、次の一手を利用してください。');
+      clearHint(null, true);
+      return;
+    }
+    // 4) 完成している場合は完成通知
+    if (C.isCompleteValid(board)) {
+      setStatus('盤面は完成しています。');
+      clearHint(null, true);
+      return;
+    }
+    // 5) 論理ヒントの検索（盤面と候補のみを使う純粋関数）
+    var res = C.findLogicalHint(board);
+    if (res.status === 'complete') { setStatus('盤面は完成しています。'); clearHint(null, true); return; }
+    if (res.status === 'invalid') { notify('次の一手を提示できません：' + res.reason); clearHint(null, true); return; }
+    if (res.status === 'contradiction') {
+      notify('盤面の状態に矛盾を検出しました（候補が 0 個のマス、または置ける場所が無い数字があります）。本来は発生しない状態のため、データの再検証をおすすめします。次の一手は提示しません。');
+      clearHint(null, true);
+      return;
+    }
+    if (res.status === 'none') {
+      clearHint(null, true);
+      setStatus('現在の盤面では、対応している論理手法で確定できる次の一手が見つかりませんでした。より高度な手法が必要な可能性があります（解なしや、論理的に解けないという意味ではありません）。');
+      return;
+    }
+    // 発見：使用回数の加算は「同一問題・同一盤面・同一の一手」で 1 回だけ
+    var h = {
+      puzzleId: play.puzzleId, boardKey: C.boardKey(board),
+      row: res.row, col: res.col, digit: res.digit,
+      technique: res.technique, techniqueName: res.techniqueName,
+      candidates: res.candidates.slice(), units: res.units.slice(), reason: res.reason
+    };
+    var key = hintKey(h);
+    var isNew = !Object.prototype.hasOwnProperty.call(play.revealedHintKeys, key);
+    if (isNew) {
+      play.revealedHintKeys[key] = true;
+      play.hintCount++;
+      save();
+    }
+    play.hint = h;
+    renderHint();
+    renderBoard();
+    renderPlayInfo();
+    updateControls();
+    setStatus('次の一手を表示しました（' + h.techniqueName + '）。' + (isNew ? 'ヒント使用回数を 1 増やしました。' : 'この一手は表示済みのため、使用回数は増えていません。'));
+  }
+  /** 表示中のヒントを適用（数字入力＋候補削除を 1 操作として記録）。 */
+  function applyHint() {
+    if (app.busy) return;
+    var h = play.hint;
+    if (!h) { setStatus('適用できるヒントがありません。'); return; }
+    if (app.mode !== 'play') { clearHint('モードが変わったため、表示していたヒントを解除しました。'); return; }
+    if (h.puzzleId !== play.puzzleId) { clearHint('問題が変わったため、表示していたヒントを解除しました。もう一度取得してください。'); return; }
+    var board = compositeBoard();
+    if (C.boardKey(board) !== h.boardKey) {
+      clearHint('盤面が変わったため、表示していたヒントを解除しました。もう一度取得してください。');
+      return;
+    }
+    if (board[h.row][h.col] !== 0 || play.initialBoard[h.row][h.col] !== 0) {
+      clearHint('対象マスが編集できない状態になったため、ヒントを解除しました。');
+      return;
+    }
+    // 適用直前の再判定（対象マス・数字・手法が引き続き成立するか）
+    var re = C.findLogicalHint(board);
+    if (!(re.status === 'found' && re.row === h.row && re.col === h.col &&
+      re.digit === h.digit && re.technique === h.technique)) {
+      clearHint('再判定の結果が変わったため、適用しませんでした。もう一度「次の一手」を取得してください。');
+      return;
+    }
+    var snap = snapshotOf(play);
+    play.userBoard[h.row][h.col] = h.digit;
+    play.notes[h.row][h.col] = [];                            // 対象マスの候補メモだけを削除
+    play.hint = null;                                         // 適用後はヒントを解除（二重適用の防止）
+    pushHistory(play, snap);
+    afterEdit(play, (h.row + 1) + '行' + (h.col + 1) + '列に「' + h.digit + '」を入力しました（' + h.techniqueName + '）。');
+  }
+
+  /* ------------------------------------------------------- 正解チェック */
+  function toggleCheck() {
+    if (app.busy || !play.puzzleId || !play.solutionVerified) return;
+    if (play.checkActive) {
+      play.checkActive = false;
+      renderPlayInfo(); renderBoard(); updateControls(); save();
+      setStatus('正解チェックの表示を解除しました。');
+      return;
+    }
+    var board = compositeBoard();
+    var wrong = 0;
+    for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
+      var v = board[r][c];
+      if (v !== 0 && v !== play.solutionBoard[r][c]) wrong++;
+    }
+    play.checkActive = true;
+    renderPlayInfo(); renderBoard(); updateControls(); save();
+    setStatus(wrong === 0
+      ? '正解チェック：入力済みの数字はすべて正解です（空欄は不正解として扱いません）。'
+      : '正解チェック：正解と異なるマスが ' + wrong + ' 個あります（該当マスを破線枠で示します。正解の数字は表示しません）。');
+  }
+
+  /* --------------------------------------------------- 自動解答（プレイ） */
+  function autoSolvePlay() {
+    if (app.busy || !play.puzzleId || !play.solutionVerified) return;
+    uiConfirm('正解を表示し、現在の入力を上書きします。実行しますか？\n（初期配置はそのまま残し、候補メモはすべて消去します。Undo で元に戻せますが、自動解答の使用記録は残ります。）')
+      .then(function (ok) {
+        if (!ok) { setStatus('自動解答をキャンセルしました。'); return; }
+        var snap = snapshotOf(play);
+        for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
+          play.userBoard[r][c] = (play.initialBoard[r][c] === 0) ? play.solutionBoard[r][c] : 0;
+        }
+        play.notes = C.createNotes();
+        play.hint = null;
+        play.autoSolved = true;                               // 盤面に変更が無くても「実行した事実」を記録
+        pushHistory(play, snap);
+        afterEdit(play, '正解を表示しました（自動解答を使用）。Undo で元の入力に戻せますが、自動解答の使用記録は取り消されません。');
+      });
+  }
+
+  /* ----------------------------------------------- 新規生成・リセット等 */
+  function makePuzzleId() {
+    var t = Date.now().toString(36).toUpperCase();
+    var r = Math.floor(Math.random() * 46656).toString(36).toUpperCase();
+    while (r.length < 3) r = '0' + r;
+    return '#' + t.slice(-5) + '-' + r;
+  }
+  function generateNewPuzzle() {
+    if (app.busy) { setStatus('別の処理を実行中です。完了するかキャンセルしてください。'); return; }
+    var diff = DIFFICULTIES[el.difficulty.value] || DIFFICULTIES.easy;
+    var token = ++app.opToken;
+    setBusy(true, diff.label + 'の問題を生成しています…（数字を削除するたびに唯一解かどうかを検証します）');
+    setStatus('問題を生成しています…');
+    heavyRun('generate', {
+      minClues: diff.minClues, maxClues: diff.maxClues,
+      maxAttempts: GENERATE_MAX_ATTEMPTS,
+      deadline: Date.now() + GENERATE_TIME_LIMIT,
+      seed: (Date.now() ^ Math.floor(Math.random() * 0x7fffffff)) >>> 0
+    }).then(function (res) {
+      setBusy(false);
+      if (token !== app.opToken) return;                      // 古い生成結果は破棄
+      if (!res || res.cancelled) return;                      // キャンセル時は現在の問題を維持
+      if (!res.ok) {
+        var why = res.reason === 'time' ? '制限時間内に'
+          : res.reason === 'attempts' ? '試行回数の上限内に' : '';
+        notify(diff.label + '（初期配置 ' + diff.minClues + '〜' + diff.maxClues + '個）の問題を' + why +
+          '生成できませんでした。範囲外の問題を提供しないため、現在の問題をそのまま維持しています。難易度を変えるか、もう一度お試しください。');
+        setStatus('問題の生成に失敗しました。現在の問題は変更していません。');
+        return;
+      }
+      applyNewPuzzle(res, diff);
+      setStatus(diff.label + 'の問題を生成しました（初期配置 ' + res.clues + '個・唯一解と正解データを検証済み・試行 ' + res.attempts + ' 回）。');
+    }, function (err) {
+      setBusy(false);
+      if (token !== app.opToken) return;
+      notify('問題の生成中にエラーが発生しました: ' + err.message + ' 現在の問題は変更していません。');
+    });
+  }
+  function applyNewPuzzle(res, diff) {
+    play.puzzleId = makePuzzleId();
+    play.difficulty = diff.key;
+    play.initialBoard = C.cloneBoard(res.puzzle);
+    play.solutionBoard = C.cloneBoard(res.solution);
+    play.userBoard = C.createBoard();
+    play.notes = C.createNotes();
+    play.selected = { r: 0, c: 0 };
+    play.inputMode = 'digit';
+    play.elapsedMs = 0;
+    timer.running = false; timer.startTs = 0;
+    play.hintCount = 0;
+    play.revealedHintKeys = {};
+    play.autoSolved = false;
+    play.checkActive = false;
+    play.checkWrong = {};
+    play.completed = false;
+    play.hint = null;
+    play.solutionVerified = true;
+    play.undo = []; play.redo = [];
+    el.difficulty.value = diff.key;
+    clearCompletion();
+    renderAll();
+    updateTimerState();
+    save();
+  }
+  function resetPlay() {
+    if (app.busy) return;
+    if (!play.puzzleId) { setStatus('問題がありません。'); return; }
+    uiConfirm('同じ問題の初期状態に戻します。入力・候補メモ・Undo/Redo 履歴・ヒント使用回数・自動解答の記録・経過時間が初期化されます（初期配置と正解データは維持します）。よろしいですか？')
+      .then(function (ok) {
+        if (!ok) { setStatus('リセットをキャンセルしました。'); return; }
+        play.userBoard = C.createBoard();
+        play.notes = C.createNotes();
+        play.undo = []; play.redo = [];
+        play.hint = null;
+        play.hintCount = 0; play.revealedHintKeys = {};
+        play.autoSolved = false;
+        play.checkActive = false; play.checkWrong = {};
+        play.completed = false;
+        play.elapsedMs = 0; timer.running = false; timer.startTs = 0;
+        play.inputMode = 'digit';
+        clearCompletion();
+        renderAll();
+        updateTimerState();
+        save();
+        setStatus('同じ問題の初期状態に戻しました（このリセット自体は Undo の対象外です）。');
+      });
+  }
+  function clearAnalysisBoard() {
+    if (app.busy) return;
+    uiConfirm('入力・解析モードの盤面、候補メモ、履歴、解析結果をすべて初期化します。よろしいですか？')
+      .then(function (ok) {
+        if (!ok) { setStatus('盤面クリアをキャンセルしました。'); return; }
+        analysis.board = C.createBoard();
+        analysis.notes = C.createNotes();
+        analysis.undo = []; analysis.redo = [];
+        analysis.result = null;
+        analysis.selected = { r: 0, c: 0 };
+        renderAll(); save();
+        setStatus('入力盤面をクリアしました（このクリア自体は Undo の対象外です）。');
+      });
+  }
+
+  /* ------------------------------------------------------------ インポート */
+  function importBoard() {
+    if (app.busy) return;
+    var norm = C.normalizeImport(el['import-text'].value);
+    if (!norm.ok) {
+      notify('インポートできません：' + norm.reason + ' 現在の盤面は変更していません。');
+      return;
+    }
+    var hasValue = false;
+    for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) if (analysis.board[r][c] !== 0) hasValue = true;
+    var applyIt = function () {
+      var snap = snapshotOf(analysis);
+      analysis.board = C.cloneBoard(norm.board);
+      analysis.notes = C.createNotes();
+      analysis.result = null;
+      pushHistory(analysis, snap);                             // インポートは 1 操作として Undo 可能
+      renderAll(); save();
+      var dup = norm.duplicates.length;
+      setStatus('インポートしました。' + (dup ? '重複しているマスが ' + dup + ' 個あります（そのまま編集できます）。' : '重複はありません。') + ' 候補メモと解析結果はクリアしました。');
+    };
+    if (hasValue) {
+      uiConfirm('現在の入力盤面を上書きしてインポートします。よろしいですか？').then(function (ok) {
+        if (!ok) { setStatus('インポートをキャンセルしました。現在の盤面はそのままです。'); return; }
+        applyIt();
+      });
+    } else applyIt();
+  }
+
+  /* ---------------------------------------------------------------- 解析 */
+  function setAnalysisResult(obj) {
+    analysis.result = obj;
+    renderAnalysis();
+    updateControls();
+    save();
+  }
+  function runAnalysis() {
+    if (app.busy) { setStatus('別の処理を実行中です。完了するかキャンセルしてください。'); return; }
+    var board = analysis.board;
+    if (!C.isValidBoardShape(board)) {
+      setAnalysisResult({ status: 'format_error', boardKey: C.boardKey(analysis.board), message: '盤面の形式が正しくありません（9×9 の 0〜9 の整数が必要です）。', verified: false });
+      setStatus('解析できません：盤面の形式が不正です。');
+      return;
+    }
+    var dups = C.findDuplicates(board);
+    if (dups.length) {
+      setAnalysisResult({ status: 'duplicate', boardKey: C.boardKey(board), duplicates: dups, message: '重複しているマスが ' + dups.length + ' 個あります。解探索は行いません（重複を修正してから解析してください）。', verified: false });
+      setStatus('解析できません：重複があります。');
+      return;
+    }
+    var token = ++app.opToken;
+    var key = C.boardKey(board);
+    setBusy(true, '解を探索しています…（2 個見つかった時点で打ち切ります）');
+    heavyRun('solve', { board: C.cloneBoard(board), limit: 2, deadline: Date.now() + SOLVE_TIME_LIMIT })
+      .then(function (res) {
+        setBusy(false);
+        if (token !== app.opToken) return;                    // 古い結果は適用しない
+        if (!res || res.cancelled) {
+          setAnalysisResult({ status: 'cancelled', boardKey: key, message: '解析をキャンセルしました（解なしではありません）。', verified: false });
+          setStatus('解析をキャンセルしました。');
+          return;
+        }
+        var kind = C.classifySolveResult(res);
+        var msg, verified = true;
+        if (kind === 'unique') msg = '解は 1 つだけです（唯一解）。探索を完了して確認しました。';
+        else if (kind === 'multiple') msg = '複数の解があります（2 個以上を確認したため打ち切りました）。唯一解ではありません。';
+        else if (kind === 'none') msg = '解がありません（重複はありませんが、条件を満たす配置が存在しません）。';
+        else { msg = '探索が制限時間に達したため、解の有無を判定できませんでした（解なしではありません）。'; verified = false; }
+        setAnalysisResult({
+          status: kind, boardKey: key, message: msg, verified: verified,
+          solution: (kind === 'unique' || kind === 'multiple') ? res.solution : null,
+          count: res.count, complete: res.complete
+        });
+        setStatus('解析しました：' + msg);
+      }, function (err) {
+        setBusy(false);
+        if (token !== app.opToken) return;
+        setAnalysisResult({ status: 'error', boardKey: key, message: '解析中にエラーが発生しました: ' + err.message, verified: false });
+      });
+  }
+  function analysisAutoSolve() {
+    if (app.busy) return;
+    var r = analysis.result;
+    if (!r) { setStatus('先に「解析」を実行してください。'); return; }
+    if (C.boardKey(analysis.board) !== r.boardKey) { setStatus('解析後に入力盤面が変更されています。もう一度「解析」を実行してください。'); return; }
+    if (r.status !== 'unique' && r.status !== 'multiple') {
+      setStatus('この解析結果には解を適用できません（' + r.status + '）。解なし・入力エラー・重複・キャンセル・制限到達の場合は盤面を変更しません。');
+      return;
+    }
+    var solution = r.solution;
+    if (!solution) { setStatus('適用できる解データがありません。もう一度「解析」を実行してください。'); return; }
+    var msg = r.status === 'multiple'
+      ? '複数の解があります。そのうち 1 つを盤面に表示します。よろしいですか？（Undo で元に戻せます）'
+      : '解を盤面に適用します。よろしいですか？（Undo で元に戻せます）';
+    uiConfirm(msg).then(function (ok) {
+      if (!ok) { setStatus('自動解答をキャンセルしました。盤面は変更していません。'); return; }
+      if (C.boardKey(analysis.board) !== r.boardKey) {
+        setStatus('適用直前に盤面が変更されたため、適用しませんでした。もう一度「解析」を実行してください。');
+        return;
+      }
+      var snap = snapshotOf(analysis);
+      analysis.board = C.cloneBoard(solution);
+      analysis.notes = C.createNotes();
+      analysis.result = null;                                  // 盤面が変わったので以前の結果は無効
+      pushHistory(analysis, snap);
+      renderAll(); save();
+      setStatus((r.status === 'multiple' ? '複数の解のうち 1 つを適用しました' : '解を適用しました') + '（Undo で元の入力に戻して再編集できます）。');
+    });
+  }
+
+  /* --------------------------------------------------------------- 保存 */
+  function initStorage() {
+    try {
+      var k = '__sudoku_probe__';
+      localStorage.setItem(k, '1');
+      localStorage.removeItem(k);
+      app.storageOk = true;
+    } catch (e) {
+      app.storageOk = false;
+      notify('この環境では保存機能（localStorage）を利用できません。プレイは続けられますが、再読み込み後の復元とヒント使用記録の永続化はできません。');
+    }
+  }
+  function serialize() {
+    return {
+      version: SAVE_VERSION,
+      mode: app.mode,
+      play: {
+        puzzleId: play.puzzleId, difficulty: play.difficulty,
+        initialBoard: play.initialBoard, userBoard: play.userBoard, solutionBoard: play.solutionBoard,
+        notes: play.notes, elapsedMs: currentElapsed(), hintCount: play.hintCount,
+        revealedHintKeys: Object.keys(play.revealedHintKeys), autoSolved: play.autoSolved,
+        checkActive: play.checkActive, completed: play.completed,
+        selected: play.selected, inputMode: play.inputMode, undo: play.undo, redo: play.redo
+      },
+      analysis: {
+        board: analysis.board, notes: analysis.notes, selected: analysis.selected,
+        inputMode: analysis.inputMode, undo: analysis.undo, redo: analysis.redo,
+        // 検証済み（確定した結論）の解析結果だけを保存する
+        result: (analysis.result && analysis.result.verified) ? analysis.result : null
+      }
+    };
+  }
+  function save() {
+    if (!app.storageOk) return;
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(serialize())); }
+    catch (e) {
+      app.storageOk = false;
+      if (!app.storageWarned) {
+        app.storageWarned = true;
+        notify('状態を保存できませんでした（保存領域の容量不足など）。以降の自動保存は行いませんが、現在のプレイはメモリ上でそのまま続けられます。');
+      }
+    }
+  }
+  /** 旧形式（version 1）からの明示的な移行。 */
+  function migrateV1(data) {
+    var p = data.play || {};
+    p.revealedHintKeys = [];                 // 旧形式には重複加算防止キーが無い
+    p.autoSolved = false;
+    data.play = p;
+    if (!data.analysis) {
+      data.analysis = { board: C.createBoard(), notes: C.createNotes(), selected: { r: 0, c: 0 }, inputMode: 'digit', undo: [], redo: [] };
+    }
+    delete data.analysis.result;
+    data.version = 2;
+    app.migrationNotice = '保存データを旧形式（version 1）から移行しました。ヒント使用回数は維持し、重複加算防止のキー集合は空にしました（旧形式で表示済みだった一手は、再表示時に改めて加算される可能性があります）。';
+    return data;
+  }
+  function validBoardShape(b) { return C.isValidBoardShape(b); }
+  function validNotes(notes, board, initial) {
+    if (!notes || notes.length !== 9) return false;
+    for (var r = 0; r < 9; r++) {
+      if (!notes[r] || notes[r].length !== 9) return false;
+      for (var c = 0; c < 9; c++) {
+        var list = notes[r][c];
+        if (!Array.isArray(list)) return false;
+        var seen = {};
+        for (var i = 0; i < list.length; i++) {
+          var d = list[i];
+          if (typeof d !== 'number' || d < 1 || d > 9 || Math.floor(d) !== d || seen[d]) return false;
+          seen[d] = true;
+        }
+        // 数字が入っているマス（初期配置・入力済み）にメモを保持しない
+        if (board[r][c] !== 0 && list.length > 0) return false;
+      }
+    }
+    return true;
+  }
+  function validHistory(list, isPlay) {
+    if (!Array.isArray(list)) return false;
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i];
+      if (!e || typeof e !== 'object') return false;
+      if (isPlay) {
+        if (!validBoardShape(e.user)) return false;
+      } else {
+        if (!validBoardShape(e.board)) return false;
+      }
+      if (!e.notes || e.notes.length !== 9) return false;
+      for (var r = 0; r < 9; r++) {
+        if (!e.notes[r] || e.notes[r].length !== 9) return false;
+        for (var c = 0; c < 9; c++) {
+          var l = e.notes[r][c];
+          if (!Array.isArray(l)) return false;
+          for (var k = 0; k < l.length; k++) {
+            var d = l[k];
+            if (typeof d !== 'number' || d < 1 || d > 9 || Math.floor(d) !== d) return false;
+          }
+        }
+      }
+    }
+    return true;
+  }
+  function loadSaved() {
+    var raw = null;
+    try { raw = localStorage.getItem(SAVE_KEY); }
+    catch (e) {
+      app.storageOk = false;
+      notify('保存領域（localStorage）にアクセスできないため、保存データの復元は行いません。プレイはそのまま続けられます。');
+      return;
+    }
+    if (!raw) return;
+    var data = null;
+    try { data = JSON.parse(raw); }
+    catch (e) {
+      notify('保存データを読み込めませんでした（JSON の解析に失敗）。破損しているため使用せず、新規状態で開始します。');
+      return;
+    }
+    if (!data || typeof data !== 'object') {
+      notify('保存データの形式が不正なため使用しませんでした。新規状態で開始します。');
+      return;
+    }
+    if (data.version === 1) data = migrateV1(data);
+    if (data.version !== SAVE_VERSION) {
+      notify('対応していない保存形式（version ' + data.version + '）のため、保存データを使用しませんでした。新規状態で開始します。');
+      return;
+    }
+    var warnings = [];
+    var nextPlay = newPlayState();
+    var nextAnalysis = newAnalysisState();
+    // --- プレイ状態の復元 ---
+    var p = data.play || {};
+    if (p.puzzleId && validBoardShape(p.initialBoard) && validBoardShape(p.userBoard) &&
+      validBoardShape(p.solutionBoard)) {
+      var okUser = true;
+      for (var r = 0; r < 9; r++) for (var c = 0; c < 9; c++) {
+        if (p.initialBoard[r][c] !== 0 && p.userBoard[r][c] !== 0) okUser = false;
+      }
+      if (!okUser) {
+        warnings.push('初期配置マスの入力値が不正だったため、プレイ状態を破棄しました。');
+      } else if (!C.isCompleteValid(p.solutionBoard)) {
+        warnings.push('正解盤面が有効な完成盤面ではないため、プレイ状態を破棄しました。');
+      } else {
+        var clueOk = true;
+        for (var r2 = 0; r2 < 9; r2++) for (var c2 = 0; c2 < 9; c2++) {
+          if (p.initialBoard[r2][c2] !== 0 && p.initialBoard[r2][c2] !== p.solutionBoard[r2][c2]) clueOk = false;
+        }
+        if (!clueOk) {
+          warnings.push('初期配置と正解盤面が食い違っているため、プレイ状態を破棄しました。');
+        } else {
+          nextPlay.puzzleId = String(p.puzzleId);
+          nextPlay.difficulty = DIFFICULTIES[p.difficulty] ? p.difficulty : 'easy';
+          nextPlay.initialBoard = C.cloneBoard(p.initialBoard);
+          nextPlay.userBoard = C.cloneBoard(p.userBoard);
+          nextPlay.solutionBoard = C.cloneBoard(p.solutionBoard);
+          nextPlay.notes = validNotes(p.notes, p.userBoard, p.initialBoard) ? C.cloneNotes(p.notes) : C.createNotes();
+          if (nextPlay.notes !== p.notes && !validNotes(p.notes, p.userBoard, p.initialBoard)) {
+            warnings.push('候補メモの形式が不正だったため、候補メモだけを空にしました。');
+          }
+          nextPlay.elapsedMs = (typeof p.elapsedMs === 'number' && isFinite(p.elapsedMs) && p.elapsedMs >= 0) ? p.elapsedMs : 0;
+          nextPlay.hintCount = (typeof p.hintCount === 'number' && isFinite(p.hintCount) && p.hintCount >= 0) ? Math.floor(p.hintCount) : 0;
+          nextPlay.autoSolved = !!p.autoSolved;
+          nextPlay.checkActive = !!p.checkActive;
+          nextPlay.completed = !!p.completed;
+          nextPlay.inputMode = (p.inputMode === 'note') ? 'note' : 'digit';
+          if (p.selected && typeof p.selected.r === 'number' && typeof p.selected.c === 'number' &&
+            p.selected.r >= 0 && p.selected.r < 9 && p.selected.c >= 0 && p.selected.c < 9) {
+            nextPlay.selected = { r: p.selected.r, c: p.selected.c };
+          }
+          var keys = p.revealedHintKeys;
+          if (Array.isArray(keys)) {
+            for (var ki = 0; ki < keys.length; ki++) {
+              if (typeof keys[ki] === 'string') nextPlay.revealedHintKeys[keys[ki]] = true;
+            }
+          } else {
+            warnings.push('ヒントの識別キー集合が不正だったため、空にしました（使用回数は維持しています）。');
+          }
+          if (validHistory(p.undo, true)) nextPlay.undo = p.undo; else warnings.push('Undo 履歴が不正だったため破棄しました。');
+          if (validHistory(p.redo, true)) nextPlay.redo = p.redo; else warnings.push('Redo 履歴が不正だったため破棄しました。');
+          if (nextPlay.undo.length > HISTORY_LIMIT) nextPlay.undo = nextPlay.undo.slice(-HISTORY_LIMIT);
+          if (nextPlay.redo.length > HISTORY_LIMIT) nextPlay.redo = nextPlay.redo.slice(-HISTORY_LIMIT);
+          nextPlay.solutionVerified = false;                   // 検証は非同期で行う（検証中は正解依存機能を無効化）
+        }
+      }
+    } else if (p.puzzleId) {
+      warnings.push('盤面データの形式が不正だったため、プレイ状態を破棄しました。');
+    }
+    // --- 入力・解析状態の復元 ---
+    var a = data.analysis || {};
+    if (validBoardShape(a.board)) {
+      nextAnalysis.board = C.cloneBoard(a.board);
+      nextAnalysis.notes = validNotes(a.notes, a.board, null) ? C.cloneNotes(a.notes) : C.createNotes();
+      if (!validNotes(a.notes, a.board, null)) warnings.push('入力・解析モードの候補メモが不正だったため空にしました。');
+      nextAnalysis.inputMode = (a.inputMode === 'note') ? 'note' : 'digit';
+      if (a.selected && typeof a.selected.r === 'number' && typeof a.selected.c === 'number' &&
+        a.selected.r >= 0 && a.selected.r < 9 && a.selected.c >= 0 && a.selected.c < 9) {
+        nextAnalysis.selected = { r: a.selected.r, c: a.selected.c };
+      }
+      if (validHistory(a.undo, false)) nextAnalysis.undo = a.undo; else warnings.push('入力・解析モードの Undo 履歴が不正だったため破棄しました。');
+      if (validHistory(a.redo, false)) nextAnalysis.redo = a.redo; else warnings.push('入力・解析モードの Redo 履歴が不正だったため破棄しました。');
+      if (nextAnalysis.undo.length > HISTORY_LIMIT) nextAnalysis.undo = nextAnalysis.undo.slice(-HISTORY_LIMIT);
+      if (nextAnalysis.redo.length > HISTORY_LIMIT) nextAnalysis.redo = nextAnalysis.redo.slice(-HISTORY_LIMIT);
+      // 検証済みの解析結果のみ復元し、対象盤面と一致することを確認する
+      if (a.result && a.result.verified && typeof a.result.boardKey === 'string' &&
+        a.result.boardKey === C.boardKey(nextAnalysis.board)) {
+        nextAnalysis.result = a.result;
+      } else if (a.result) {
+        warnings.push('解析結果は保存対象外（未検証または盤面不一致）のため復元しませんでした。');
+      }
+    } else if (a.board) {
+      warnings.push('入力・解析モードの盤面形式が不正だったため、空の盤面に戻しました。');
+    }
+    play = nextPlay;
+    analysis = nextAnalysis;
+    app.mode = (data.mode === 'analysis') ? 'analysis' : 'play';
+    el.difficulty.value = play.difficulty;
+    if (app.migrationNotice) notify(app.migrationNotice);
+    if (warnings.length) notify('保存データの一部を復元できませんでした：\n・' + warnings.join('\n・'));
+  }
+  /** 復元した問題の「唯一解」と「正解データの一致」を再検証する。 */
+  function verifySavedPuzzle() {
+    if (!play.puzzleId) return;
+    var token = ++app.verifyToken;
+    play.solutionVerified = false;
+    updateControls();
+    setStatus('保存された問題と正解データを検証しています…');
+    heavyRun('solve', { board: C.cloneBoard(play.initialBoard), limit: 2, deadline: Date.now() + SOLVE_TIME_LIMIT })
+      .then(function (res) {
+        if (token !== app.verifyToken) return;
+        if (!res || res.cancelled) {
+          play.solutionVerified = false;
+          updateControls();
+          setStatus('保存データの検証が完了しませんでした。もう一度ページを再読み込みするか、新しい問題を生成してください。');
+          return;
+        }
+        var kind = C.classifySolveResult(res);
+        if (kind === 'unique' && C.sameBoard(res.solution, play.solutionBoard)) {
+          play.solutionVerified = true;
+          updateControls();
+          setStatus('保存された問題を復元し、唯一解であることと正解データの一致を検証しました。');
+        } else {
+          play.solutionVerified = false;
+          play = newPlayState();
+          el.difficulty.value = play.difficulty;
+          clearCompletion();
+          renderAll(); updateTimerState(); save();
+          notify('保存された問題データの検証に失敗しました（唯一解ではない、または保存された正解と一致しません）。プレイ状態を安全な初期状態に戻しました。');
+        }
+      }, function () {
+        if (token !== app.verifyToken) return;
+        play.solutionVerified = false;
+        updateControls();
+        notify('保存データの検証中にエラーが発生しました。新しい問題を生成してください。');
+      });
+  }
+
+  /* ----------------------------------------------------------- 確認ダイアログ */
+  function uiConfirm(message) {
+    return new Promise(function (resolve) {
+      var dlg = el['confirm-dialog'];
+      el['confirm-text'].textContent = message;
+      if (typeof dlg.showModal !== 'function') { resolve(window.confirm(message)); return; }
+      var done = false;
+      function finish(val) {
+        if (done) return;
+        done = true;
+        el['confirm-ok'].removeEventListener('click', onOk);
+        el['confirm-cancel'].removeEventListener('click', onCancel);
+        dlg.removeEventListener('close', onClose);
+        if (dlg.open) dlg.close();
+        resolve(val);
+      }
+      function onOk() { finish(true); }
+      function onCancel() { finish(false); }
+      function onClose() { finish(false); }
+      el['confirm-ok'].addEventListener('click', onOk);
+      el['confirm-cancel'].addEventListener('click', onCancel);
+      dlg.addEventListener('close', onClose);
+      dlg.showModal();                                        // フォーカスは自動でダイアログ内へ移る
+      el['confirm-cancel'].focus();                           // 破壊的操作のため既定はキャンセル側
+    });
+  }
+
+  /* -------------------------------------------------------------- モード */
+  function setMode(mode) {
+    if (mode === app.mode) return;
+    if (app.busy) cancelHeavy();                              // 進行中の重い処理をキャンセル
+    app.mode = mode;
+    app.opToken++;                                            // 古い結果を無効化
+    play.hint = null;                                         // 表示中のヒントは解除
+    renderAll();
+    updateTimerState();
+    save();
+    setStatus(mode === 'play'
+      ? 'プレイモードに切り替えました（タイマーはプレイモードのときだけ動きます）。'
+      : '入力・解析モードに切り替えました。プレイ中のタイマーは停止し、プレイの入力はそのまま保持されます。');
+  }
+
+  /* ------------------------------------------------------------ イベント */
+  function isTextInput(t) {
+    if (!t) return false;
+    var tag = (t.tagName || '').toLowerCase();
+    return tag === 'input' || tag === 'textarea' || tag === 'select' || t.isContentEditable === true;
+  }
+  function bindEvents() {
+    // モード切り替え（タブ）
+    el['tab-play'].addEventListener('click', function () { setMode('play'); });
+    el['tab-analysis'].addEventListener('click', function () { setMode('analysis'); });
+    [el['tab-play'], el['tab-analysis']].forEach(function (tab) {
+      tab.addEventListener('keydown', function (ev) {
+        if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') {
+          ev.preventDefault();
+          var next = app.mode === 'play' ? 'analysis' : 'play';
+          setMode(next);
+          $(next === 'play' ? 'tab-play' : 'tab-analysis').focus();
+        }
+      });
+    });
+
+    // 盤面: 選択（クリック／タップ）
+    el.board.addEventListener('click', function (ev) {
+      var cell = ev.target.closest ? ev.target.closest('.cell') : null;
+      if (!cell) return;
+      selectCell(parseInt(cell.getAttribute('data-r'), 10), parseInt(cell.getAttribute('data-c'), 10), true);
+    });
+    // 盤面: キーボード（盤面にフォーカスがある場合だけ処理する）
+    el.board.addEventListener('keydown', function (ev) {
+      if (isTextInput(ev.target)) return;
+      var st = current(), r = st.selected.r, c = st.selected.c;
+      var key = ev.key;
+      if (key === 'ArrowUp') { ev.preventDefault(); moveSelection(-1, 0); return; }
+      if (key === 'ArrowDown') { ev.preventDefault(); moveSelection(1, 0); return; }
+      if (key === 'ArrowLeft') { ev.preventDefault(); moveSelection(0, -1); return; }
+      if (key === 'ArrowRight') { ev.preventDefault(); moveSelection(0, 1); return; }
+      if (key === 'Home') { ev.preventDefault(); selectCell(r, 0, true); return; }
+      if (key === 'End') { ev.preventDefault(); selectCell(r, 8, true); return; }
+      if (key === 'PageUp') { ev.preventDefault(); selectCell(0, c, true); return; }
+      if (key === 'PageDown') { ev.preventDefault(); selectCell(8, c, true); return; }
+      if (key >= '1' && key <= '9') { ev.preventDefault(); inputDigit(parseInt(key, 10)); return; }
+      if (key === '0' || key === 'Backspace' || key === 'Delete') { ev.preventDefault(); eraseSelected(); return; }
+      if (key === 'm' || key === 'M') { ev.preventDefault(); toggleInputMode(); return; }
+      if ((ev.ctrlKey || ev.metaKey) && (key === 'z' || key === 'Z')) {
+        ev.preventDefault();
+        if (ev.shiftKey) doRedo(); else doUndo();
+        return;
+      }
+    });
+    // 全体: テキスト入力欄以外での Undo/Redo ショートカット
+    document.addEventListener('keydown', function (ev) {
+      if (isTextInput(ev.target)) return;
+      if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'z' || ev.key === 'Z')) {
+        ev.preventDefault();
+        if (ev.shiftKey) doRedo(); else doUndo();
+      }
+    });
+
+    // 数字パッド
+    el.pad.addEventListener('click', function (ev) {
+      var t = ev.target;
+      if (!t || !t.getAttribute) return;
+      var d = t.getAttribute('data-digit');
+      if (d) { inputDigit(parseInt(d, 10)); return; }
+      if (t.getAttribute('data-erase')) eraseSelected();
+    });
+    el['btn-note'].addEventListener('click', toggleInputMode);
+    el['btn-clear-notes'].addEventListener('click', clearSelectedNotes);
+    el['btn-undo'].addEventListener('click', doUndo);
+    el['btn-redo'].addEventListener('click', doRedo);
+
+    // プレイモード
+    el['btn-new'].addEventListener('click', generateNewPuzzle);
+    el['btn-reset'].addEventListener('click', resetPlay);
+    el['btn-check'].addEventListener('click', toggleCheck);
+    el['btn-hint'].addEventListener('click', requestHint);
+    el['btn-apply-hint'].addEventListener('click', applyHint);
+    el['btn-close-hint'].addEventListener('click', function () {
+      clearHint('ヒントの表示を閉じました（使用回数の記録は残ります）。');
+    });
+    el['btn-solve'].addEventListener('click', autoSolvePlay);
+    el['difficulty'].addEventListener('change', function () {
+      setStatus('難易度を「' + (DIFFICULTIES[el.difficulty.value] || DIFFICULTIES.easy).label + '」にしました。「新しい問題」で生成します。');
+    });
+
+    // 入力・解析モード
+    el['btn-import'].addEventListener('click', importBoard);
+    el['btn-analyze'].addEventListener('click', runAnalysis);
+    el['btn-analysis-solve'].addEventListener('click', analysisAutoSolve);
+    el['btn-clear-board'].addEventListener('click', clearAnalysisBoard);
+
+    // 処理中パネル
+    el['btn-cancel'].addEventListener('click', function () {
+      var had = cancelHeavy();
+      setStatus(had ? '処理をキャンセルしました。' : 'キャンセルできる処理はありません。');
+    });
+
+    // テスト
+    el['btn-run-tests'].addEventListener('click', runTestsUI);
+
+    // 可視状態・終了時の保存
+    document.addEventListener('visibilitychange', function () {
+      updateTimerState();                                     // 非表示中はタイマーを止める（閉じていた時間は加算しない）
+      if (document.hidden) save();
+    });
+    window.addEventListener('pagehide', function () {
+      if (timer.running) { play.elapsedMs = currentElapsed(); }
+      save();
+    });
+  }
+
+  /* ------------------------------------------------------------ テスト実行 */
+  function runTestsUI() {
+    if (app.busy) return;
+    var names = SudokuTests.list();
+    var list = el['test-results'];
+    list.innerHTML = '';
+    el['btn-run-tests'].disabled = true;
+    var passed = 0, failed = 0, i = 0;
+    el['test-summary'].textContent = 'テストを実行しています…（0 / ' + names.length + '）';
+    function step() {
+      if (i >= names.length) {
+        el['test-summary'].textContent = 'テスト完了：' + passed + ' 件成功 / ' + failed + ' 件失敗（合計 ' + names.length + ' 件）';
+        el['btn-run-tests'].disabled = false;
+        return;
+      }
+      var res = SudokuTests.runOne(i);
+      var li = document.createElement('li');
+      li.className = res.pass ? 'ok' : 'ng';
+      var title = document.createElement('b');
+      title.textContent = (res.pass ? '成功' : '失敗') + '（' + res.ms + 'ms）';
+      li.appendChild(title);
+      li.appendChild(document.createTextNode(' ' + res.name + (res.slow ? '［重い処理］' : '')));
+      if (!res.pass) {
+        var span = document.createElement('span');
+        span.className = 'detail';
+        span.textContent = res.detail;
+        li.appendChild(span);
+      }
+      list.appendChild(li);
+      if (res.pass) passed++; else failed++;
+      i++;
+      el['test-summary'].textContent = 'テストを実行しています…（' + i + ' / ' + names.length + '）';
+      setTimeout(step, 0);                                    // 1 件ずつ実行して画面を譲る
+    }
+    setTimeout(step, 0);
+  }
+
+  /* -------------------------------------------------------------- 初期化 */
+  function init() {
+    cacheDom();
+    buildBoard();
+    buildPad();
+    bindEvents();
+    initStorage();
+    loadSaved();
+    updateTabs();
+    renderAll();
+    updateTimerState();
+    startTicker();
+    if (play.puzzleId) {
+      if (play.completed) onCompleted();
+      verifySavedPuzzle();
+    } else {
+      setStatus('問題がありません。難易度を選んで「新しい問題」を押すと、唯一解の問題を生成します。');
+    }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+</script>
+</body>
+</html>
