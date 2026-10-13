@@ -6,9 +6,11 @@
   "license": "MIT",
   "scripts": {
     "test": "node tools/run-tests.js",
-    "test:ui": "node tools/smoke.js"
+    "test:ui": "node tools/smoke.js",
+    "test:browser": "node tools/browser-test.js"
   },
   "devDependencies": {
-    "jsdom": "^26.0.0"
+    "jsdom": "^26.0.0",
+    "playwright": "^1.64.0"
   }
 }

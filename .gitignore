@@ -5,3 +5,4 @@ tools/boards.json
 tools/boards_partial.json
 .DS_Store
 Thumbs.db
+test-artifacts/
