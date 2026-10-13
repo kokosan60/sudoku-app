@@ -65,6 +65,33 @@ async function waitFor(fn, timeout, label) {
     doc.querySelectorAll('#board [role="gridcell"]').length === 81, 'ARIA 構造');
   check('起動: 共有盤面の説明が DOM に存在する', !!$('shared-note'), 'shared-note=' + !!$('shared-note'));
 
+  /* ------------------------------- キーボード入力（盤面にフォーカスが無くても使える） */
+  const docKey = (k, opts) => doc.dispatchEvent(new win.KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true, cancelable: true }, opts || {})));
+  const userCells = () => cells().filter((c) => c.className.indexOf('user') >= 0);
+  docKey('3');
+  check('キーボード: マスを選ばずに数字キーを押すと、入力できるマスを自動で選んで入力する',
+    userCells().length === 1 && userCells()[0].querySelector('.value').textContent.trim() === '3',
+    'user=' + userCells().length + ' / status=' + $('status').textContent);
+  check('キーボード: 入力先として自動選択されたマスが選択状態になる',
+    userCells().length === 1 && userCells()[0].className.indexOf('selected') >= 0);
+  docKey('Backspace');
+  check('キーボード: Backspace で消去できる（グローバル）', userCells().length === 0, 'user=' + userCells().length);
+  docKey('m');
+  check('キーボード: M キーで候補メモモードに切り替わる（グローバル）', $('btn-note').getAttribute('aria-pressed') === 'true');
+  docKey('m');
+  check('キーボード: M キーで数字入力モードに戻る（グローバル）', $('btn-note').getAttribute('aria-pressed') === 'false');
+  const beforeTextKey = values();
+  const ta = $('import-text');
+  ta.focus();
+  ta.dispatchEvent(new win.KeyboardEvent('keydown', { key: '7', bubbles: true, cancelable: true }));
+  check('キーボード: テキスト入力欄への入力は盤面に影響しない', values() === beforeTextKey, 'values が変化');
+  const selBefore = cells().findIndex((c) => c.className.indexOf('selected') >= 0);
+  docKey('ArrowDown');
+  check('キーボード: 盤面にフォーカスが無いときの矢印キーは選択を動かさない（ページスクロールを妨げない）',
+    cells().findIndex((c) => c.className.indexOf('selected') >= 0) === selBefore, 'selBefore=' + selBefore);
+  docKey('9', { ctrlKey: true });
+  check('キーボード: 修飾キー付きの入力は盤面に影響しない', userCells().length === 0, 'user=' + userCells().length);
+
   /* ------------------------------------------- 自動テスト機能の削除の確認 */
   check('自動テスト: 実行ボタンが削除されている', $('btn-run-tests') === null);
   check('自動テスト: 結果一覧の要素が削除されている', $('test-results') === null && $('test-summary') === null);
@@ -85,6 +112,14 @@ async function waitFor(fn, timeout, label) {
   check('生成: 初期配置マスは編集不可（aria-readonly=true）',
     cells().filter((c) => c.className.indexOf('initial') >= 0)
       .every((c) => c.getAttribute('aria-readonly') === 'true'));
+  docKey('4');
+  check('キーボード: 生成直後にマスを選ばず数字キーで入力できる',
+    cells().some((c) => c.className.indexOf('user') >= 0 && c.querySelector('.value').textContent.trim() === '4'),
+    $('status').textContent);
+  check('キーボード: 初期配置マスではなく空きマスに入力される',
+    cells().filter((c) => c.className.indexOf('user') >= 0).every((c) => c.className.indexOf('initial') < 0));
+  docKey('Backspace');
+  check('キーボード: 消去して元の状態に戻せる', cells().filter((c) => c.className.indexOf('user') >= 0).length === 0);
 
   /* -------------------------------------------------------- 入力と候補メモ */
   const emptyIdx = cells().findIndex((c) => c.className.indexOf('initial') < 0);

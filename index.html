@@ -264,7 +264,7 @@ dialog p{white-space:pre-line}
       <section class="panel board-panel" aria-labelledby="board-heading">
         <h2 id="board-heading" class="visually-hidden">数独盤面</h2>
         <div id="board" role="grid" aria-label="数独盤面 9行9列" aria-rowcount="9" aria-colcount="9"></div>
-        <p class="board-caption">マスをクリック／タップして選択します。キーボードでは矢印キーで移動、1〜9で数字入力、Mで候補メモ、0・Backspace・Deleteで消去、Ctrl（⌘）+Z で Undo です。</p>
+        <p class="board-caption"><strong>キーボード入力はいつでも使えます</strong>（マスを選んでいなくても、数字キーを押すと入力できるマスを自動で選びます）。矢印キーで移動、1〜9で数字入力、Mで候補メモ、0・Backspace・Deleteで消去、Ctrl（⌘）+Z で Undo です。マウス／タッチではマスをクリック／タップして選択します。</p>
       </section>
 
       <section class="panel hint-panel" aria-labelledby="hint-title">
@@ -287,6 +287,7 @@ dialog p{white-space:pre-line}
           <button type="button" id="btn-redo">Redo</button>
         </div>
         <p class="mode-indicator" id="input-mode-indicator" data-mode="digit">入力モード：数字</p>
+        <p class="panel-note small">数字ボタンはタッチ／マウス操作用です。キーボードからも同じ操作ができ、マスを選んでいなくても数字キーで入力できます。</p>
       </section>
     </div>
 
@@ -1087,7 +1088,7 @@ var SudokuCore = (function () {
   var board = C.createBoard();
   var notes = C.createNotes();
   var history = { undo: [], redo: [] };
-  var view = { selected: { r: 0, c: 0 }, inputMode: 'digit' };
+  var view = { selected: { r: 0, c: 0 }, inputMode: 'digit', userPicked: false };
 
   // プレイモード固有（共有盤面に紐づく付加情報）
   function newPlayMeta() {
@@ -1606,6 +1607,7 @@ var SudokuCore = (function () {
   function selectCell(r, c, focus) {
     if (r < 0 || r > 8 || c < 0 || c > 8) return;
     view.selected = { r: r, c: c };
+    if (focus) view.userPicked = true;                       // クリック・キー操作による明示的な選択
     renderBoard();
     updateControls();
     if (focus) {
@@ -1616,6 +1618,27 @@ var SudokuCore = (function () {
   function moveSelection(dr, dc) {
     selectCell(Math.min(8, Math.max(0, view.selected.r + dr)),
       Math.min(8, Math.max(0, view.selected.c + dc)), true);
+  }
+  /** 入力できる最初の空きマス（無ければ入力できる最初のマス）を選び、フォーカスする。 */
+  function focusFirstEmptyCell() {
+    var target = -1, fallback = -1;
+    for (var i = 0; i < 81; i++) {
+      var r = Math.floor(i / 9), c = i % 9;
+      if (!isEditable(r, c)) continue;
+      if (fallback < 0) fallback = i;
+      if (board[r][c] === 0) { target = i; break; }
+    }
+    if (target < 0) target = fallback;
+    if (target < 0) return false;
+    selectCell(Math.floor(target / 9), target % 9, true);
+    view.userPicked = false;                                 // 自動で選んだマス（ユーザーの明示選択ではない）
+    return true;
+  }
+  /** キーボード入力の直前に、入力先のマスが選ばれていることを保証する。 */
+  function ensureTypingTarget() {
+    if (isEditable(view.selected.r, view.selected.c)) return true;   // いまの選択マスに入力できる
+    if (view.userPicked) return true;                        // ユーザーが選んだ初期配置マス → 入力側の案内に任せる
+    return focusFirstEmptyCell();                            // 未選択・自動選択 → 入力できるマスを自動で選ぶ
   }
   function afterEdit(message) {
     // 数字盤面が変わったときだけヒントを解除する（候補メモだけの変更では保持）
@@ -1915,6 +1938,7 @@ var SudokuCore = (function () {
       }
       applyNewPuzzle(res, diff);
       setStatus(diff.label + 'の問題を生成しました（初期配置 ' + res.clues + '個・唯一解と正解データを検証済み・試行 ' + res.attempts + ' 回）。盤面は両モードで共有されます。');
+      focusFirstEmptyCell();                                 // 生成後はそのままキーボードで入力できる
     }, function (err) {
       setBusy(false);
       if (token !== app.opToken) return;
@@ -2002,6 +2026,7 @@ var SudokuCore = (function () {
       afterEdit('インポートしました（盤面はプレイモードと共有しているため、プレイモードにも反映されています）。'
         + (norm.duplicates.length ? '重複しているマスが ' + norm.duplicates.length + ' 個あります。' : '重複はありません。')
         + ' 候補メモと解析結果はクリアしました。');
+      focusFirstEmptyCell();
     };
     if (anyValue()) {
       uiConfirm('現在の盤面を上書きしてインポートします。この盤面はプレイモードと共有しているため、プレイモード側も置き換わります。よろしいですか？').then(function (ok) {
@@ -2111,6 +2136,7 @@ var SudokuCore = (function () {
         clearCompletion();
         setMode('play');
         setStatus('この盤面をプレイ問題として採用しました（唯一解を確認済み）。正解チェック・次の一手・自動解答が使えます。');
+        focusFirstEmptyCell();
       });
   }
 
@@ -2431,7 +2457,8 @@ var SudokuCore = (function () {
       if (!cell) return;
       selectCell(parseInt(cell.getAttribute('data-r'), 10), parseInt(cell.getAttribute('data-c'), 10), true);
     });
-    // 盤面: キーボード（盤面にフォーカスがある場合だけ処理する）
+    // 盤面: カーソル移動（盤面にフォーカスがある場合だけ。数字・消去・候補メモは
+    // フォーカスの有無に関係なく使えるよう、document 側でまとめて処理する）
     el.board.addEventListener('keydown', function (ev) {
       if (isTextInput(ev.target)) return;
       var r = view.selected.r, c = view.selected.c;
@@ -2444,22 +2471,29 @@ var SudokuCore = (function () {
       if (key === 'End') { ev.preventDefault(); selectCell(r, 8, true); return; }
       if (key === 'PageUp') { ev.preventDefault(); selectCell(0, c, true); return; }
       if (key === 'PageDown') { ev.preventDefault(); selectCell(8, c, true); return; }
-      if (key >= '1' && key <= '9') { ev.preventDefault(); inputDigit(parseInt(key, 10)); return; }
-      if (key === '0' || key === 'Backspace' || key === 'Delete') { ev.preventDefault(); eraseSelected(); return; }
-      if (key === 'm' || key === 'M') { ev.preventDefault(); toggleInputMode(); return; }
+    });
+    // 全体: キーボードからの数字入力・消去・候補メモ・Undo/Redo
+    // 盤面にフォーカスが無くても使える（マスを選んでいない場合は入力できるマスを自動で選ぶ）。
+    document.addEventListener('keydown', function (ev) {
+      if (isTextInput(ev.target)) return;                    // テキスト入力欄の操作を妨げない
+      if (el['confirm-dialog'] && el['confirm-dialog'].open) return;   // 確認ダイアログ表示中は処理しない
+      var key = ev.key;
       if ((ev.ctrlKey || ev.metaKey) && (key === 'z' || key === 'Z')) {
         ev.preventDefault();
         if (ev.shiftKey) doRedo(); else doUndo();
         return;
       }
-    });
-    // 全体: テキスト入力欄以外での Undo/Redo ショートカット
-    document.addEventListener('keydown', function (ev) {
-      if (isTextInput(ev.target)) return;
-      if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'z' || ev.key === 'Z')) {
-        ev.preventDefault();
-        if (ev.shiftKey) doRedo(); else doUndo();
-      }
+      if (ev.ctrlKey || ev.metaKey || ev.altKey) return;      // 他のショートカットは尊重する
+      var isDigit = key >= '1' && key <= '9';
+      var isErase = key === '0' || key === 'Backspace' || key === 'Delete';
+      var isNote = key === 'm' || key === 'M';
+      if (!isDigit && !isErase && !isNote) return;
+      if (app.busy) { setStatus('処理中です。完了するか「キャンセル」を押してから入力してください。'); return; }
+      ev.preventDefault();
+      if (!ensureTypingTarget()) { notify('入力できるマスがありません。'); return; }
+      if (isDigit) inputDigit(parseInt(key, 10));
+      else if (isErase) eraseSelected();
+      else toggleInputMode();
     });
 
     el.pad.addEventListener('click', function (ev) {
@@ -2524,6 +2558,7 @@ var SudokuCore = (function () {
     renderAll();
     updateTimerState();
     startTicker();
+    focusFirstEmptyCell();                                   // 起動直後からキーボードで入力できるようにする
     if (play.puzzleId && play.completed) onCompleted();
     if (puzzleAttached()) verifySavedPuzzle();
     if (!play.puzzleId) {
